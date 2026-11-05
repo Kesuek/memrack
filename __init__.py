@@ -23,7 +23,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Write kinds (plain strings: docked modules load via spec_from_file_location
 # and compare by VALUE, never by identity).
@@ -134,13 +134,19 @@ def _load_manifest(path: Path):
         raise TypeError("manifest %r names backend %r but code says %r"
                         % (path.name, man["name"], backend.name))
     backend.manifest = man  # the card is DATA (SPEC §1.3) — attached, verified against code
+    modes = man.get("search") or ()
+    if modes and not callable(getattr(backend, "search", None)):
+        raise TypeError("manifest %s claims search=%r but the code ships no search method"
+                        % (path.name, modes))   # a card that lies is worse than no card
     return backend
 
 
 def _card(backend) -> dict:
     """The card the agent sees: manifest data wins over code attrs (both verified at load)."""
     man = getattr(backend, "manifest", None) or {}
-    modes = man.get("search") or tuple(getattr(backend, "search_modes", ()))
+    dyn = getattr(backend, "card_modes", None)
+    modes = man.get("search") or (tuple(dyn()) if callable(dyn)
+                                 else tuple(getattr(backend, "search_modes", ())))
     best_for = man.get("best_for") or getattr(backend, "best_for", "")
     lim = man.get("limits") or getattr(backend, "limits", "")
     return {
@@ -167,6 +173,18 @@ def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
     if dock.is_dir():
         candidates += sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml")))
         candidates += [p for p in sorted(dock.glob("*.py"))]  # legacy code-first drop-ins still work
+    # pass 0: module files REFERENCED by manifests are docked via their manifest —
+    # never ALSO load them as legacy code-first drop-ins (double-registration trap)
+    referenced = set()
+    if dock.is_dir():
+        for mpath in list(dock.glob("*.yaml")) + list(dock.glob("*.yml")):
+            try:
+                import yaml as _yaml
+                man = _yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
+                mod = Path(str(man.get("module") or ""))
+                referenced.add((mpath.parent / mod if not mod.is_absolute() else mod).resolve())
+            except Exception:
+                pass   # unparseable manifests surface as registry errors in the main pass
     for path in candidates:
         if path.name.startswith("_") or path.name.startswith("disabled-"):
             continue  # disabled-<name>.yaml = parked without deletion (bridge semantics)
@@ -174,6 +192,8 @@ def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
             if path.suffix in (".yaml", ".yml"):
                 backend = _load_manifest(path)
             else:
+                if path.resolve() in referenced:
+                    continue   # belongs to a manifest — its backend loads THERE
                 backend = _load_backend_file(path)
                 if path.parent == dock:
                     backend.built_in = False
@@ -235,7 +255,8 @@ class _MemrackBase:
         for bname, backend in sorted(self._rack.items()):
             try:
                 backend.initialize(
-                    session_id=self._session_id, hermes_home=self._hermes_home, **kwargs)
+                    session_id=self._session_id, hermes_home=self._hermes_home,
+                    provider_config=self._config, **kwargs)
                 initialized[bname] = backend
             except Exception as exc:
                 self._gaps.append({"backend": bname,
@@ -604,6 +625,22 @@ class _MemrackBase:
         self._log_route("memrack_write", kind, backend.name)
         return json.dumps(result, indent=2, ensure_ascii=False)
 
+    def _rescan_dock(self) -> list:
+        """Cheap fs-only rescan: manifests on disk that this session's rack has not loaded —
+        they live 'registered (next session)' (bridge-watch spirit, SPEC §1.3)."""
+        dock = docked_dir(self._hermes_home)
+        if not (dock and dock.is_dir()):
+            return []
+        known = set(self._rack) | {p.get("name") for p in self._parked} | {
+            e.get("name") for e in self._load_errors if e.get("name")}
+        pending = []
+        for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
+            if path.name.startswith("_") or path.name.startswith("disabled-"):
+                continue
+            if path.stem not in known:
+                pending.append({"manifest": path.name, "note": "registered (next session)"})
+        return pending
+
     # ── inventory ──
     def status(self) -> dict:
         return {
@@ -617,6 +654,7 @@ class _MemrackBase:
             "active_backend": self._active.name if self._active else None,
             "forced_backend": self._config.get("backend"),
             "enabled_builtins": self._config.get("enabled_backends", list(_DEFAULT_ENABLED)),
+            "pending_docks": self._rescan_dock(),
             "session_id": self._session_id,
         }
 

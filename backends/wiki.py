@@ -1,20 +1,130 @@
-"""Built-in "wiki" backend — wraps the wiki-memory provider.
+"""Built-in "wiki" backend — wraps the wiki-memory provider + page SEARCH engine.
 
-v0.1 target of route-all: memrack + this backend behaves like running
-wiki-memory directly. Needs the Hermes runtime (imports plugins.memory).
+v0.1: route-all target, behavior like running wiki-memory directly (needs the
+Hermes runtime: imports plugins.memory).
+v0.3: `WikiIndex` (stdlib-only, NO runtime dependency) in-memory page index so
+memrack_search('fts') hits wiki PAGES too — kind=page, target
+wiki:<relpath>:L<n>, snippet (SPEC §3.2); mtime-diff refresh pass on session
+end (no per-write work).
+
+Tests import WikiIndex directly — the wrapper's Hermes dependency stays quarantined.
 """
+
+import logging
+import re
+import threading
+import time
+from pathlib import Path
+
+_LOG = logging.getLogger("memrack.wiki")
+_TOKEN = re.compile(r"[\w\-\.\:/]+", re.UNICODE)
+
+
+class WikiIndex:
+    """In-memory page index over a markdown tree. Pure stdlib, testable standalone."""
+
+    def __init__(self, root, session_id=""):
+        self._root = Path(str(root or (Path.home() / "wiki" / "main")))
+        self._session_id = session_id
+        self._index: dict = {}   # rel_path -> (mtime, text)
+        self._lock = threading.RLock()   # REENTRANT: search() hält ihn und ruft rescan()
+        self._started = False
+        self.rescan()   # Index-Aufbau einmal pro Start (Session-Start-Pass, SPEC T-007)
+        self._started = True
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def pages(self) -> int:
+        return len(self._index)
+
+    def rescan(self) -> int:
+        """Index-Refresh-Pass: new/changed pages in, deleted out. Returns change count."""
+        if not self._root.is_dir():
+            self._index = {}
+            return 0
+        fresh, changed = {}, 0
+        for md in self._root.rglob("*.md"):
+            rel = str(md.relative_to(self._root))
+            try:
+                mtime = md.stat().st_mtime
+                text = md.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            cached = self._index.get(rel)
+            if cached is None or cached[0] != mtime:
+                changed += 1
+            fresh[rel] = (mtime, text)
+        with self._lock:
+            self._index = fresh
+        if changed:
+            _LOG.info("memrack wiki index: %d pages, %d changed", len(fresh), changed)
+        return changed
+
+    def search(self, query, mode, k, session_id=""):
+        """Page hits per SPEC §3.2: rank 1..k, AND-semantics over tokens, title boost."""
+        if mode != "fts":
+            raise ValueError("wiki engine carries mode 'fts' only (got %r)" % mode)
+        with self._lock:
+            self.rescan()
+            snapshot = dict(self._index)
+        tokens = [t.lower() for t in _TOKEN.findall(query or "") if len(t) > 1]
+        if not tokens:
+            return []
+        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        scored = []
+        for rel, (_mtime, text) in snapshot.items():
+            lines = text.splitlines()
+            body = [l.lower() for l in lines]
+            title = (lines[0] if lines else "").lower()
+            score, first_line = 0.0, None
+            for tok in tokens:
+                if not any(tok in l for l in body):
+                    score = -1.0   # AND-Semantik: ein fehlendes Token killt die Seite
+                    break
+                score += 3.0 if tok in title else 0.0
+                score += 1.0 * sum(1 for l in body if tok in l)
+                if first_line is None:
+                    first_line = next(i for i, l in enumerate(body, 1) if tok in l)
+            if score > 0:
+                scored.append({"backend": "wiki", "kind": "page", "rank": 0,
+                               "target": "wiki:%s:%s" % (rel, ("L%d" % first_line) if first_line else ""),
+                               "snippet": self._snippet(lines, first_line), "ts": now,
+                               "score": score})
+        scored.sort(key=lambda h: (-h["score"], h["target"]))
+        out = []
+        for i, h in enumerate(scored[:k], 1):
+            h["rank"] = i
+            out.append({m: h[m] for m in ("backend", "kind", "rank", "target", "snippet", "ts")})
+        return out
+
+    @staticmethod
+    def _snippet(lines, at):
+        if not at or not lines:
+            return ""
+        lo, hi = max(0, at - 2), min(len(lines), at + 1)
+        return " | ".join(l.strip()[:120] for l in lines[lo:hi] if l.strip())
 
 
 class WikiBackend:
     name = "wiki"
-    write_types = ("explicit", "episodic", "semantic", "curation")  # v0.1: all
+    best_for = "Strukturwissen/Ganzseiten (Regeln, Zusammenh\u00e4nge), Kuratier-Ziel via Notizwand"
+    limits = "kein atomarer Write (Seiten schreibt der Agent mit Datei-Tools)"
+    search_modes = ("fts",)   # static; the index is runtime-built
+    writeable = False
+    write_types = ("explicit", "episodic", "semantic", "curation")
 
     def __init__(self):
         self._prov = None
         self._session_id = ""
+        self._engine: WikiIndex | None = None
 
-    def initialize(self, session_id="", hermes_home=None, **kwargs):
+    def initialize(self, session_id="", hermes_home=None, provider_config=None, **kwargs):
         self._session_id = session_id or ""
+        cfg = dict(provider_config or {})
+        self._engine = WikiIndex(cfg.get("wiki_root"), session_id=self._session_id)
         try:
             from plugins.memory import load_memory_provider
         except Exception as exc:
@@ -25,9 +135,20 @@ class WikiBackend:
         prov.initialize(
             session_id=self._session_id,
             hermes_home=str(hermes_home) if hermes_home else None,
-            **{k: v for k, v in kwargs.items() if k != "hermes_home"},
+            **{k: v for k, v in kwargs.items() if k not in ("hermes_home", "provider_config")},
         )
         self._prov = prov
+
+    # ── search engine delegation ──
+    def search(self, query, mode, k, session_id=""):
+        assert self._engine is not None, "not initialized"
+        return self._engine.search(query, mode, k, session_id=session_id or self._session_id)
+
+    def on_session_end(self, messages, *, session_id=""):
+        if self._prov:
+            self._prov.on_session_end(messages)
+        if self._engine:
+            self._engine.rescan()   # Index-Refresh-Pass (T-007)
 
     def on_turn(self, user, assistant, *, session_id=""):
         if self._prov:
@@ -36,10 +157,6 @@ class WikiBackend:
     def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
         if self._prov:
             self._prov.on_memory_write(action, target, content, metadata=metadata)
-
-    def on_session_end(self, messages, *, session_id=""):
-        if self._prov:
-            self._prov.on_session_end(messages)
 
     def prefetch(self, query, *, session_id=""):
         if self._prov:
@@ -64,12 +181,16 @@ class WikiBackend:
     def export(self):
         return {
             "name": self.name,
-            "write_types": list(self.write_types),
-            "provides": "wiki-memory wrapper (built-in)",
+            "best_for": self.best_for,
+            "limits": self.limits,
+            "search": list(self.search_modes),
+            "write": self.writeable,
+            "built_in": True,
+            "provides": "wiki-memory wrapper + page search engine",
+            "pages": self._engine.pages if self._engine else 0,
             "active": self._prov is not None,
         }
 
-    # additive surface: expose the wrapped provider's own tools untouched
     @property
     def tool_schemas(self):
         try:

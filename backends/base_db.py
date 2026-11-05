@@ -54,21 +54,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pointers_fts USING fts5(
 """
 
 
+_VEC_TABLE = """
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[768]);
+"""
+
+
 class BaseDbBackend:
     name = PLUGIN_NAME
     best_for = "atomare Fakten + Mirror von memory-writes; exakte Nachfrage in Millisekunden"
-    limits = "EIN Satz pro Row, keine Prosa; kein vec (optionaler Upgrade T-007)"
-    search_modes = ("fts", "pointers")   # vec = optionaler Upgrade (T-007), dann hier ergänzt
+    limits = "EIN Satz pro Row, keine Prosa; kein Prosa-Store; vec nur wenn sqlite-vec+ollama ver\u00fcgbar"
+    search_modes = ("fts", "pointers")   # STATIC floor; card_modes() reports the DYNAMIC set
     writeable = True
     write_types = ("explicit", "episodic", "semantic", "curation")  # accepts everything routed at it
+
+    _EMBED_MODEL = "nomic-embed-text"
+    _OLLAMA_HOST = "http://127.0.0.1:11434"
 
     def __init__(self):
         self._db: sqlite3.Connection | None = None
         self._path: Path | None = None
         self._lock = threading.Lock()
+        self._provider_config: dict = {}
+        self._vec_ok = False
+        self._vec_gap = "not probed yet"
 
     # ── lifecycle ──
-    def initialize(self, session_id="", hermes_home=None, **kwargs):
+    def initialize(self, session_id="", hermes_home=None, provider_config=None, **kwargs):
+        self._provider_config = dict(provider_config or {})
+        self._EMBED_MODEL = self._provider_config.get("embedding_model") or self._EMBED_MODEL
+        self._OLLAMA_HOST = self._provider_config.get("ollama_host") or self._OLLAMA_HOST
         base = Path(hermes_home or (Path.home() / ".hermes")) / "plugin-data" / "memrack"
         base.mkdir(parents=True, exist_ok=True)
         try:
@@ -83,6 +97,23 @@ class BaseDbBackend:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA busy_timeout=3000")
             self._db.commit()
+        # vec capability probe: optional upgrade (T-007) — degrade to fts-only with a visible gap
+        self._vec_ok = self._vec_probe()
+        if self._vec_ok:
+            try:
+                import sqlite_vec
+                self._db.enable_load_extension(True)   # python builds must authorize the load first
+                sqlite_vec.load(self._db)
+                self._db.enable_load_extension(False)
+                with self._lock:
+                    self._db.executescript(_VEC_TABLE)
+                    self._db.commit()
+                _LOG.info("base-db vec engine ready (%s)", self._EMBED_MODEL)
+            except (sqlite3.OperationalError, AttributeError) as exc:
+                # build without extension support / locked loader — honest degrade, never crash the floor
+                self._vec_ok = False
+                self._vec_gap = "extension load failed: %s" % exc
+                _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
 
     def _fts_rebuild(self):
         """Index-Refresh im Pass (nach jedem Write-Batch), NICHT per Trigger — SPEC §2."""
@@ -131,6 +162,81 @@ class BaseDbBackend:
             self._fts_rebuild()
             self._db.commit()
 
+
+    # ── vec engine (optional upgrade; SPEC §1.4 degradation ladder) ──
+    def card_modes(self):
+        """DYNAMIC modes: the card the provider shows reflects the environment honestly."""
+        return ("fts", "pointers") + (("vec",) if self._vec_ok else ())
+
+    def _vec_probe(self):
+        try:
+            import sqlite_vec  # noqa: F401
+        except ImportError:
+            self._vec_gap = "sqlite-vec package not installed (optional dep)"
+            return False
+        try:
+            import urllib.request, json as _json
+            with urllib.request.urlopen(
+                    self._OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=3) as resp:
+                tags = _json.load(resp)
+        except Exception as exc:
+            self._vec_gap = "%s not reachable: %s" % (self._OLLAMA_HOST, exc)
+            return False
+        names = [str(m.get("name", "")).split(":")[0] for m in tags.get("models", [])]
+        if self._EMBED_MODEL not in names:
+            self._vec_gap = "embedding model %r not pulled (ollama list)" % self._EMBED_MODEL
+            return False
+        return True
+
+    def _embed(self, texts):
+        import urllib.request, json as _json
+        body = _json.dumps({"model": self._EMBED_MODEL, "input": list(texts)}).encode("utf-8")
+        req = urllib.request.Request(
+            self._OLLAMA_HOST.rstrip("/") + "/api/embed", data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.load(resp)
+        return list(data.get("embeddings") or [])
+
+    def _vec_index_missing(self, batch=32):
+        """Index-Refresh-Pass, Teil 1: facts ohne Vektor einbetten — inkrementell, batched."""
+        import sqlite_vec
+        rows = self._db.execute(
+            "SELECT f.id, f.content FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
+            " WHERE v.rowid IS NULL ORDER BY f.id LIMIT ?", (batch,)).fetchall()
+        if not rows:
+            return 0
+        ids = [r[0] for r in rows]
+        vecs = self._embed([r[1] for r in rows])
+        if len(vecs) != len(rows):
+            raise RuntimeError("embedding count mismatch: %d != %d" % (len(vecs), len(rows)))
+        with self._lock:
+            self._db.executemany(
+                "INSERT INTO facts_vec(rowid, embedding) VALUES(?, ?)",
+                [(rid, sqlite_vec.serialize_float32(v)) for rid, v in zip(ids, vecs)])
+            self._db.commit()
+        return len(rows)
+
+    def _vec_knn(self, query, k):
+        import sqlite_vec
+        q_vecs = self._embed([query])
+        if not q_vecs:
+            return []
+        qvec = sqlite_vec.serialize_float32(q_vecs[0])
+        rows = self._db.execute(
+            "SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?",
+            (qvec, k)).fetchall()
+        hits = []
+        for i, (rid, dist) in enumerate(rows, 1):
+            row = self._db.execute(
+                "SELECT content, target, ts FROM facts WHERE id=?", (rid,)).fetchone()
+            if row:
+                hits.append({"backend": self.name, "kind": "fact", "rank": i,
+                             "content": row[0],
+                             "target": row[1] or "base-db:%d" % rid, "ts": row[2],
+                             "distance": round(float(dist), 4)})
+        return hits
+
     def search(self, query, mode, k):
         """Ranked hits per SPEC §3.2. 'fts' = facts, 'pointers' = Verzeichnis. No 'vec' yet."""
         assert self._db is not None, "not initialized"
@@ -153,8 +259,14 @@ class BaseDbBackend:
             hits = [{"backend": self.name, "kind": "pointer", "rank": i + 1,
                      "content": "%s -> %s" % (r[0], r[1]), "target": "pointer:%s" % r[1],
                      "ts": r[3]} for i, r in enumerate(rows)]
+        elif mode == "vec":
+            if not self._vec_ok:
+                raise ValueError("vec not available: %s" % self._vec_gap)
+            self._vec_index_missing()          # inline pass: backlog embeds on first vec query
+            return self._vec_knn(query, k)
         else:
-            raise ValueError("this engine does not carry mode %r (modes: %s)" % (mode, list(self.search_modes)))
+            raise ValueError("this engine carries mode %r not (modes: %s)"
+                             % (mode, list(self.card_modes())))
         return hits
 
     def _fts_query(self, query, k, table, sql, cols):
@@ -259,8 +371,9 @@ class BaseDbBackend:
             p = self._db.execute("SELECT COUNT(*) FROM pointers").fetchone()[0]
             facts, pointers = f, p
         return {"name": self.name, "best_for": self.best_for, "limits": self.limits,
-                "search": list(self.search_modes), "write": self.writeable,
+                "search": list(self.card_modes()), "write": self.writeable,
                 "built_in": True, "facts": facts, "pointers": pointers,
+                "vec": self._vec_ok, "vec_gap": None if self._vec_ok else self._vec_gap,
                 "db": str(self._path) if self._path else None}
 
 

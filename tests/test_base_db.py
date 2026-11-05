@@ -53,7 +53,7 @@ def test_search_pointers_mode(eng):
 
 def test_search_unknown_mode_raises(eng):
     with pytest.raises(ValueError):
-        eng.search("x", "vec", 8)   # honest: this engine carries no vec
+        eng.search("x", "nonsense", 8)   # honest unknown mode — vec may or may not live here (env)
 
 
 def test_touch_increments_hits(eng):
