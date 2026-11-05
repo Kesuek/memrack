@@ -1,0 +1,8 @@
+name: memrack
+version: 0.1.0
+description: "memrack — one provider slot, many memory backends: rule-based data-type routing into a pluggable backend rack (FTS5, vector, markdown/wiki), fan-out retrieval."
+author: Kesuek
+license: MIT
+hooks:
+  - on_session_end
+  - on_memory_write
