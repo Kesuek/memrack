@@ -15,28 +15,34 @@ have.
 
 `memrack` is ONE MemoryProvider that hosts a **rack of dockable backends**:
 
-- a **rule-based router** classifies what is being stored — by data *type*,
-  never by LLM relevance judgement — and writes to the backend that fits it
+- the **agent routes**: each backend carries a card (`best_for` / `limits` /
+  `search`), and `memrack_write(content, backend=?)` writes where the agent
+  chooses; deterministic source rules are only the fallback. No LLM judge
+  anywhere — not at write (an earlier experiment with autonomous LLM routing
+  was removed as broken) and not at read (no `auto`-mode for the same reason)
 - retrieval **fans out** across the rack and merges: hybrid retrieval by
   architecture instead of a hybrid monolith
-- backends **dock** in two ways: drop a module into
-  `$HERMES_HOME/plugins/memrack/backends.d/<name>.py` exporting
-  `export_backend()`, or (v0.2+) provide one via the
-  `hermes.memrack_backends` entry-point group
+- backends **dock bridge-adapter-style** (presence = registered): drop a
+  `backends.d/<name>.yaml` manifest (`name`, `module`, `best_for`, `limits`,
+  `search`) plus its module; `rm` the manifest = unregistered, a
+  `disabled-` prefix = parked. Legacy code-first `.py` drop-ins still work;
+  pip entry points come later (v0.3+)
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
 ## Status — v0.1.0 skeleton
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
-- [x] Backend protocol + registry with `backends.d/` folder discovery
-- [x] Rule-based router with route table + JSONL route log
-- [x] Built-in `wiki` backend wrapping the wiki-memory provider
-      (v0.1 route-all target: identical behavior to running wiki-memory)
-- [ ] `fts_store` (SQLite FTS5) backend
-- [ ] `vec_store` (sqlite-vec + Ollama embeddings) backend
-- [ ] `memory_search(mode=auto|fts|vec|all)` fan-out tool
-- [ ] ledger (SQLite WAL, idempotent, replayable)
+- [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
+      solo-functional (the Basisfall: one backend is the whole rack, tested)
+- [x] Rack cards (`best_for`/`limits`/`search` — manifest data for docked, attrs for built-ins)
+- [x] `memrack_write` / `memrack_search` / `memrack_status` — agent routing,
+      fan-out with RRF merge, target collapse, guided empty-hints, honest mode-errors
+- [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked)
+- [ ] vec engine (sqlite-vec + nomic-embed-text, optional upgrade)
+- [ ] wiki search engine (in-memory FTS over markdown pages)
+- [ ] bridge-adapter-style manifest registry polish (T-003): status surfaces
+- [ ] heat report CLI (`memrack report`)
 - [ ] catalog submission
 
 ## Install (experimental, not yet published)
@@ -69,6 +75,9 @@ A backend is any module exposing `export_backend()` returning an object with:
 | `on_pre_compress(messages)` | pre-compression insight rescue (optional) |
 | `shutdown()` | close resources |
 | `export() -> dict` | inventory, shown by `memrack_status` |
+| `search(query, mode, k) -> list[Hit]` | *optional* — the rack merges (RRF); card must claim the modes it ships |
+| `write(kind, content, tags=, session_id=)` | *optional* — atomic fact store; without it `memrack_write` answers a guided error |
+| `touch(ids)` | *optional* — heat counter (hits++), the report basis |
 
 Write types: `explicit`, `episodic`, `semantic`, `curation`. The router maps
 each type to exactly ONE primary backend — no fan-out writes.

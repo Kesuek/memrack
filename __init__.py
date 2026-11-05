@@ -1,14 +1,18 @@
 """memrack — memory provider with a pluggable backend rack.
 
-One provider slot: a rule-based router sends each write by data TYPE into
-the fitting dockable backend; retrieval fans out across the rack and merges
-(hybrid retrieval by architecture, not by bolt-on).
+One provider slot; the rack hosts many backends. v0.2 semantics (SPEC):
+the AGENT routes — every backend advertises a card (best_for / limits /
+search); `memrack_write` takes the agent's backend choice, `memrack_search`
+fans out and merges. Fallback rules are deterministic by SOURCE (tool, not
+content); no LLM judge anywhere — not at write ("Dreaming" lesson,
+2026-08-29) and not at read (no 'auto'-mode).
 
-Design guardrail: routing is decided by static type rules, never by an LLM
-relevance judgement at write time ("Dreaming" lesson, removed 2026-08-29).
-Everything is stored; judgement happens at read/curation time.
+The Basisfall is design law: with only the built-in `base-db` backend
+(stdlib-only), the whole memory works — fresh HERMES_HOME, zero docking
+(T-013 proves it).
 """
 
+import importlib.util
 import json
 import logging
 import os
@@ -19,20 +23,37 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-# Write types (plain strings: docked backend modules are loaded via
-# spec_from_file_location and must compare by VALUE, never identity).
+# Write kinds (plain strings: docked modules load via spec_from_file_location
+# and compare by VALUE, never by identity).
 EXPLICIT = "explicit"   # scalar facts, config values, exact identifiers
 EPISODIC = "episodic"   # raw conversation turns / session activity
 SEMANTIC = "semantic"   # paraphrase-sensitive knowledge snippets
 CURATION = "curation"   # curated structured destinations (wiki pages)
 ALL_TYPES = (EXPLICIT, EPISODIC, SEMANTIC, CURATION)
 
-DEFAULT_BACKEND = "wiki"  # v0.1 route-all target (wiki-memory wrapper)
+DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
+_DEFAULT_ENABLED = ("base-db",)   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
 
-# v0.1: route-all — byte-equal to running wiki-memory directly.
-# v0.2 turns these rows into per-type engines (fts/vec/...).
+_MEMORY_WRITE_TYPES = (
+    ("add", EXPLICIT), ("patch", EXPLICIT),
+    ("replace", EXPLICIT), ("remove", EXPLICIT),
+)
+
+_SEARCH_MODES = ("fts", "vec", "pointers")
+
+
+def route(write_type: str) -> str:
+    """Fallback mapping: which backend a write kind would go to if the agent
+    does not choose. Deterministic by kind, never by content."""
+    backend = ROUTE_TABLE.get(write_type)
+    if backend is None:
+        _LOG.warning("memrack router: unknown write kind %r -> %s", write_type, DEFAULT_BACKEND)
+        return DEFAULT_BACKEND
+    return backend
+
+
 ROUTE_TABLE = {
     EXPLICIT: DEFAULT_BACKEND,
     EPISODIC: DEFAULT_BACKEND,
@@ -40,27 +61,8 @@ ROUTE_TABLE = {
     CURATION: DEFAULT_BACKEND,
 }
 
-_MEMORY_WRITE_TYPES = (
-    ("add", EXPLICIT), ("patch", EXPLICIT),
-    ("replace", EXPLICIT), ("remove", EXPLICIT),
-)
-
-
-def route(write_type: str) -> str:
-    """Map a write type to its backend name (static, testable, logged)."""
-    backend = ROUTE_TABLE.get(write_type)
-    if backend is None:
-        _LOG.warning("memrack router: unknown write type %r -> %s", write_type, DEFAULT_BACKEND)
-        return DEFAULT_BACKEND
-    return backend
-
-
-def pick_backend(backends, write_type: str):
-    """Choose a backend by write_types membership (v0.2: per-type scores)."""
-    for backend in backends:
-        if write_type in tuple(getattr(backend, "write_types", ())):
-            return backend
-    return None
+_MEMORY_WRITE_TYPES = tuple(
+    (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
 
 
 # ── backend registry ─────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ _BACKEND_METHODS = (
     "initialize", "on_turn", "on_memory_write", "on_session_end",
     "prefetch", "system_prompt_block", "shutdown", "export",
 )
+_BACKEND_OPTIONAL = ("search", "write", "touch", "tool_schemas", "handle_tool_call")
 
 
 def ensure_backend(obj, origin: str):
@@ -78,6 +81,10 @@ def ensure_backend(obj, origin: str):
         raise TypeError("backend %r misses: %s" % (origin, ", ".join(missing)))
     if not getattr(obj, "name", None):
         raise TypeError("backend %r misses a name" % origin)
+    # card-vs-code: a claimed search mode without a search implementation is a LIE
+    modes = getattr(obj, "search_modes", None) or getattr(obj, "search", ())
+    if modes and not callable(getattr(obj, "search", None)):
+        raise TypeError("backend %r claims search=%r without a search method" % (origin, modes))
     return obj
 
 
@@ -93,9 +100,7 @@ def docked_dir(hermes_home=None) -> Path:
 
 
 def _load_backend_file(path: Path):
-    """Load one docked backend module; contract: the module exposes export_backend()."""
-    import importlib.util
-
+    """Load one backend module; contract: the module exposes export_backend()."""
     spec = importlib.util.spec_from_file_location(
         "memrack_backend_%s" % path.stem.replace("-", "_"), path)
     if spec is None or spec.loader is None:
@@ -105,35 +110,92 @@ def _load_backend_file(path: Path):
     return ensure_backend(mod.export_backend(), origin=path.name)
 
 
-def discover_backends(hermes_home=None) -> dict:
-    """Built-ins live in backends/ beside this file; users dock via backends.d/.
-    A failing module is skipped and reported — one bad dock never kills the rack."""
-    rack: dict = {}
-    errors: list = []
+def _load_manifest(path: Path):
+    """Bridge-pattern docking: <name>.yaml IS the card (presence = registered).
+    Fields: name, module (required); best_for/limits/search/accepts (optional)."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("docked manifests need pyyaml: %s" % exc) from exc
+    with open(path, encoding="utf-8") as fh:
+        man = yaml.safe_load(fh) or {}
+    if not man.get("name"):
+        raise TypeError("manifest %s misses a name" % path.name)
+    module = man.get("module")
+    if not module:
+        raise TypeError("manifest %s misses its module field" % path.name)
+    module_path = Path(module)
+    if not module_path.is_absolute():
+        module_path = path.parent / module
+    if not module_path.exists():
+        raise FileNotFoundError("manifest %s points to missing module %s" % (path.name, module_path))
+    backend = _load_backend_file(module_path)
+    if backend.name != man["name"]:
+        raise TypeError("manifest %r names backend %r but code says %r"
+                        % (path.name, man["name"], backend.name))
+    backend.manifest = man  # the card is DATA (SPEC §1.3) — attached, verified against code
+    return backend
+
+
+def _card(backend) -> dict:
+    """The card the agent sees: manifest data wins over code attrs (both verified at load)."""
+    man = getattr(backend, "manifest", None) or {}
+    modes = man.get("search") or tuple(getattr(backend, "search_modes", ()))
+    best_for = man.get("best_for") or getattr(backend, "best_for", "")
+    lim = man.get("limits") or getattr(backend, "limits", "")
+    return {
+        "name": backend.name,
+        "best_for": best_for,
+        "limits": lim,
+        "modes": list(modes or ()),
+        "write": callable(getattr(backend, "write", None)),
+        "search": callable(getattr(backend, "search", None)),
+        "built_in": getattr(backend, "built_in", False),
+        "origin": (man.get("module") or "code") if man else "code",
+    }
+
+
+def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
+    """Built-ins live in backends/ beside this file (code-first, plugin-shipped);
+    users dock via backends.d/ manifest-first (bridge pattern: presence = registered).
+
+    enabled_builtins: the config gate for code-first built-ins. None = all.
+    A failing module/manifest is skipped and reported — one bad dock never kills the rack."""
+    result = {"backends": {}, "errors": [], "parked": [], "gaps": []}
     dock = docked_dir(hermes_home)
-    candidates = list((Path(__file__).resolve().parent / "backends").glob("*.py"))
+    candidates = sorted((Path(__file__).resolve().parent / "backends").glob("*.py"))
     if dock.is_dir():
-        candidates += list(dock.glob("*.py"))
-    for path in sorted(candidates):
-        if path.name.startswith("_"):
-            continue
+        candidates += sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml")))
+        candidates += [p for p in sorted(dock.glob("*.py"))]  # legacy code-first drop-ins still work
+    for path in candidates:
+        if path.name.startswith("_") or path.name.startswith("disabled-"):
+            continue  # disabled-<name>.yaml = parked without deletion (bridge semantics)
         try:
-            backend = _load_backend_file(path)
-            if backend.name in rack:
-                errors.append({"file": path.name,
-                               "error": "duplicate backend name %r" % backend.name})
+            if path.suffix in (".yaml", ".yml"):
+                backend = _load_manifest(path)
+            else:
+                backend = _load_backend_file(path)
+                if path.parent == dock:
+                    backend.built_in = False
+            if backend.name in result["backends"]:
+                result["errors"].append({"file": path.name,
+                                         "error": "duplicate backend name %r" % backend.name})
                 continue
-            rack[backend.name] = backend
+            if path.parent != dock and enabled_builtins is not None \
+                    and backend.name not in tuple(enabled_builtins):
+                result["parked"].append({"name": backend.name, "reason": "not in enabled_backends"})
+                continue
+            result["backends"][backend.name] = backend
         except Exception as exc:
-            errors.append({"file": path.name,
-                           "error": "%s: %s" % (type(exc).__name__, exc)})
-    return {"backends": rack, "errors": errors}
+            result["errors"].append({"file": path.name,
+                                     "error": "%s: %s" % (type(exc).__name__, exc)})
+    return result
 
 
 # ── provider core (ABC binding happens in register()) ────────────────────────
 
 class _MemrackBase:
-    """All hooks delegate to the routed backend; route decisions are logged."""
+    """Hooks delegate by SOURCE rules; the rack card lives in the prompt block."""
 
     @property
     def name(self) -> str:
@@ -144,7 +206,10 @@ class _MemrackBase:
         self._session_id = ""
         self._hermes_home = None
         self._rack: dict = {}
+        self._cards: dict = {}
+        self._parked: list = []
         self._load_errors: list = []
+        self._gaps: list = []
         self._active = None
         self._force = False
         self._route_log = None
@@ -155,21 +220,31 @@ class _MemrackBase:
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
-        rack = discover_backends(self._hermes_home)
-        self._rack = rack["backends"]
-        self._load_errors = rack["errors"]
 
-        # ONE path: forced backend via config, else the route-all default.
-        forced = self._config.get("backend")
-        target = self._rack.get(forced) if forced else self._rack.get(DEFAULT_BACKEND)
-        if target is None:
-            raise RuntimeError(
-                "memrack: backend %r not in rack %s (docking errors: %s)"
-                % (forced or DEFAULT_BACKEND, sorted(self._rack), self._load_errors))
-        target.initialize(
-            session_id=self._session_id, hermes_home=self._hermes_home, **kwargs)
-        self._active = target
-        self._force = bool(forced)
+        enabled = self._config.get("enabled_backends", _DEFAULT_ENABLED)
+        rack = discover_backends(self._hermes_home, enabled_builtins=enabled)
+        self._rack = rack["backends"]
+        self._parked = rack["parked"]
+        self._load_errors = rack["errors"]
+        self._cards = {n: _card(b) for n, b in self._rack.items()}
+
+        # initialize every rack member; a member that fails to init = Gap (Degradations-Leiter),
+        # but the DEFAULT/FORCED target failing is fatal (Basisfall-Pflicht).
+        target = self._pick_default_target()
+        initialized = {}
+        for bname, backend in sorted(self._rack.items()):
+            try:
+                backend.initialize(
+                    session_id=self._session_id, hermes_home=self._hermes_home, **kwargs)
+                initialized[bname] = backend
+            except Exception as exc:
+                self._gaps.append({"backend": bname,
+                                   "error": "%s: %s" % (type(exc).__name__, exc)})
+                if bname == target:
+                    raise RuntimeError(
+                        "memrack: default backend %r failed to initialize: %s"
+                        % (target, exc)) from exc
+        self._rack = initialized
 
         log_dir = Path(self._hermes_home) / "plugin-data" / PLUGIN_NAME
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -178,23 +253,47 @@ class _MemrackBase:
         except OSError:
             pass
         self._route_log = log_dir / "route_log.jsonl"
-        _LOG.info("memrack ready (v%s): backends=%s active=%s errors=%s",
-                  __version__, sorted(self._rack), self._active.name,
+        self._active = self._rack.get(target) or (self._rack.get(DEFAULT_BACKEND))
+        forced = self._config.get("backend")
+        if forced and forced in self._rack:
+            self._force = True
+        _LOG.info("memrack ready (v%s): backends=%s active=%s gaps=%s parked=%s errors=%s",
+                  __version__, sorted(self._rack),
+                  self._active.name if self._active else None,
+                  self._gaps or "none", self._parked or "none",
                   self._load_errors or "none")
 
+    def _pick_default_target(self):
+        forced = self._config.get("backend")
+        target = forced or DEFAULT_BACKEND
+        if target not in self._rack and len(self._rack) == 1:
+            # Basisfall-Regel: single-backend-rack → dorthin, egal wie es heißt
+            target = next(iter(self._rack))
+        return target
+
     # ── routing bookkeeping ──
-    def _routed(self, write_type: str):
+    def _routed_for_kind(self, kind: str):
+        """Source-rule routing (deterministic, no content judgement):
+        forced > rules: episodic/turn → wiki (session-writer) if enabled else None;
+        explicit/semantic/curation → the default floor backend."""
         if self._force:
             return self._active
-        backend = pick_backend(list(self._rack.values()), write_type)
-        return backend if backend is not None else self._active
+        if kind == EPISODIC:
+            return self._rack.get("wiki")
+        return self._rack.get(self._pick_default_target_for_writes())
 
-    def _log_route(self, kind: str, write_type: str, backend: str):
+    def _pick_default_target_for_writes(self):
+        forced = self._config.get("backend")
+        if forced and forced in self._rack:
+            return forced
+        return DEFAULT_BACKEND if DEFAULT_BACKEND in self._rack else self._pick_default_target()
+
+    def _log_route(self, kind: str, detail: str, backend: str):
         if not self._route_log:
             return
         entry = json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-            "kind": kind, "write_type": write_type, "backend": backend,
+            "kind": kind, "detail": detail, "backend": backend,
             "session_id": self._session_id,
         }, ensure_ascii=False)
         with self._lock:
@@ -204,29 +303,34 @@ class _MemrackBase:
             except OSError as exc:  # read-only home — never break a turn over the log
                 _LOG.warning("memrack route log failed: %s", exc)
 
-    # ── provider hooks ──
+    # ── provider hooks (Source-rule delegation) ──
     def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
         if not (user_content or assistant_content):
             return None
-        backend = self._routed(EPISODIC)
+        backend = self._routed_for_kind(EPISODIC)
+        if backend is None:
+            # Turns live in Hermes' state.db; memrack only records the routing fact.
+            self._log_route("turn", "unstored (state.db is canonical)", "—")
+            return None
         out = backend.on_turn(user_content, assistant_content,
                               session_id=session_id or self._session_id)
-        self._log_route("turn", EPISODIC, backend.name)
+        self._log_route("turn", "episodic", backend.name)
         return out
 
     def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
-        write_type = dict(_MEMORY_WRITE_TYPES).get(action, EXPLICIT)
-        backend = self._routed(write_type)
+        backend = self._routed_for_kind(EXPLICIT)
+        if backend is None:
+            return {"status": "unrouted", "reason": "no explicit-facts backend in rack"}
         out = backend.on_memory_write(action, target, content, metadata=metadata,
                                       session_id=session_id or self._session_id)
-        self._log_route("memory_write:%s" % action, write_type, backend.name)
+        self._log_route("memory_write:%s" % action, str(target), backend.name)
         return out
 
     def on_session_end(self, messages=None, **kwargs):
         if self._active is None:
             return None
         out = self._active.on_session_end(messages, session_id=self._session_id)
-        self._log_route("session_end", CURATION, self._active.name)
+        self._log_route("session_end", "delegation to %s" % self._active.name, self._active.name)
         return out
 
     def on_session_switch(self, new_session_id=None, **kwargs):
@@ -257,18 +361,47 @@ class _MemrackBase:
         return self._active.prefetch(query, session_id=session_id or self._session_id) or ""
 
     def system_prompt_block(self) -> str:
-        if self._active is None:
+        parts = []
+        if self._active is not None:
+            base = self._active.system_prompt_block() or ""
+            if base:
+                parts.append(base)
+        card_lines = self._card_block()
+        if card_lines:
+            parts.append(card_lines)
+        return "\n\n".join(parts)
+
+    def _card_block(self) -> str:
+        """The rack card (SPEC §1.1): one line per backend, tiny, informs the agent's choices."""
+        if not self._rack:
             return ""
-        return self._active.system_prompt_block() or ""
+        lines = ["memrack rack (v%s): wähle Ziele bewusst bei memrack_write;" % __version__]
+        for bname in sorted(self._cards):
+            c = self._cards[bname]
+            lines.append("- %s: %s | search: %s%s%s" % (
+                bname, c["best_for"] or "",
+                ",".join(c["modes"]) or "none",
+                "" if c["write"] else " | kein atomarer Write",
+                " (built-in)" if c["built_in"] else ""))
+        return "\n".join(lines[:7])
 
     def shutdown(self):
-        if self._active is not None:
-            self._active.shutdown()
+        for backend in list(self._rack.values()):
+            try:
+                backend.shutdown()
+            except Exception as exc:
+                _LOG.warning("memrack backend %s shutdown failed: %s",
+                             getattr(backend, "name", "?"), exc)
 
     def backup_paths(self):
-        return [str(self._route_log)] if self._route_log else []
+        paths = [str(self._route_log)] if self._route_log else []
+        for backend in self._rack.values():
+            path = getattr(backend, "db_path", None)
+            if path:
+                paths.append(str(path))
+        return paths
 
-    # ── tools (additive: routed backend keeps its own tool surface) ──
+    # ── tools: search / write / status (SPEC §3, §1.2) ──
     @staticmethod
     def _status_tool_name():
         return "memrack_status"
@@ -284,38 +417,220 @@ class _MemrackBase:
                 if fname and fname not in seen:
                     seen.add(fname)
                     schemas.append(schema)
-        if self._status_tool_name() not in seen:
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": self._status_tool_name(),
-                    "description": "List memrack backends, the route table and recent router decisions.",
-                    "parameters": {"type": "object", "properties": {}, "required": []},
-                },
-            })
+        our = {
+            "memrack_search": {
+                "type": "object", "properties": {
+                    "query": {"type": "string"},
+                    "mode": {"type": "string",
+                             "enum": list(_SEARCH_MODES) + ["all"],
+                             "default": "all"},
+                    "backend": {"type": "string",
+                                "default": None},
+                    "limit": {"type": "integer", "default": 8},
+                }, "required": ["query"],
+                "additionalProperties": False,
+            },
+            "memrack_write": {
+                "type": "object", "properties": {
+                    "content": {"type": "string"},
+                    "backend": {"type": "string", "default": None},
+                    "kind": {"type": "string", "enum": [EXPLICIT], "default": EXPLICIT},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                }, "required": ["content"],
+                "additionalProperties": False,
+            },
+            "memrack_status": {"type": "object", "properties": {},
+                               "required": [], "additionalProperties": False},
+        }
+        for name, params in our.items():
+            if name not in seen:
+                schemas.append({"type": "function",
+                                "function": {"name": name,
+                                             "description": _TOOL_DESCRIPTIONS[name],
+                                             "parameters": params}})
         return schemas
 
     def handle_tool_call(self, tool_name, args, **kwargs):
-        if self._active is not None and tool_name != self._status_tool_name():
+        args = dict(args or {})
+        if tool_name == "memrack_search":
+            return self._tool_search(args)
+        if tool_name == "memrack_write":
+            return self._tool_write(args)
+        if tool_name == self._status_tool_name():
+            return json.dumps(self.status(), indent=2, ensure_ascii=False)
+        if self._active is not None:
             fn = getattr(self._active, "handle_tool_call", None)
             if fn is not None:
                 return fn(tool_name, args, **kwargs)
-        if tool_name == self._status_tool_name():
-            return json.dumps(self.status(), indent=2, ensure_ascii=False)
         raise KeyError("unknown memrack tool %r" % tool_name)
+
+    # ── search: fan-out + EINE Fusionsregel (SPEC §3.2/§3.3) ──
+    def _tool_search(self, args):
+        started = time.time()
+        query = str(args.get("query") or "").strip()
+        mode = args.get("mode") or "all"
+        backend_wish = args.get("backend") or None
+        limit = max(1, min(int(args.get("limit") or 8), 32))
+        if not query:
+            return json.dumps({"error": "query required",
+                               "hint": "Was suchst du? Ein Stichwort reicht, z.B. 'Relay Port'"},
+                              ensure_ascii=False)
+
+        chosen = list(self._rack.values())
+        if backend_wish:
+            if backend_wish not in self._rack:
+                return json.dumps({
+                    "error": "unknown backend %r" % backend_wish,
+                    "hint": "Registriert: %s" % ", ".join(sorted(self._rack)),
+                }, ensure_ascii=False)
+            chosen = [self._rack[backend_wish]]
+
+        requested = list(_SEARCH_MODES) if mode == "all" else [mode]
+        if mode != "all" and mode not in _SEARCH_MODES:
+            return json.dumps({"error": "unknown mode %r" % mode,
+                               "hint": "modes: all|fts|vec|pointers"}, ensure_ascii=False)
+
+        runs, engine_errors = [], []
+        carried = sorted({m for b in chosen for m in self._cards[b.name]["modes"]})
+        if mode != "all" and mode not in carried:
+            # SPEC §1.4 Degradation: ein spezifisch angefragt modus, den KEIN im Rack liegender
+            # Backend trägt, ist ein ehrlicher Error — niemals stilles 0-Ergebnis.
+            return json.dumps({
+                "error": "kein backend trägt mode %r" % mode,
+                "hint": "verfügbare Modi: %s" % (", ".join(carried) or "keine"),
+            }, ensure_ascii=False)
+        for backend in chosen:
+            modes = [m for m in requested if m in tuple(self._cards[backend.name]["modes"])]
+            if not modes:
+                if backend_wish:
+                    return json.dumps({
+                        "error": "backend %r trägt mode %r nicht" % (backend.name, mode),
+                        "hint": "verfügbare Modi: %s" % ", ".join(
+                            self._cards[backend.name]["modes"] or ["keine"]),
+                    }, ensure_ascii=False)
+                continue
+            for m in modes:
+                try:
+                    hits = backend.search(query, m, limit) or []
+                    for h in hits:
+                        h["mode"] = m
+                    runs.append(hits)
+                except Exception as exc:
+                    engine_errors.append({"backend": backend.name, "mode": m,
+                                          "error": "%s: %s" % (type(exc).__name__, exc)})
+
+        merged = self._rrf_merge(runs, limit)
+        ms = int((time.time() - started) * 1000)
+        self._touch_facts(merged)
+        result = {"query": query, "mode": mode, "backend": backend_wish,
+                  "ms": ms, "results": merged, "engine_errors": engine_errors}
+        if not merged and not engine_errors:
+            hint = "0 Treffer."
+            if backend_wish:
+                hint += " Nur %r durchsucht — probier backend=None für den ganzen Rack." % backend_wish
+            hint += " Versuch mode 'vec' (Paraphrasen) oder 'pointers' (Verzeichnis);"
+            hint += " breiter formulieren hilft auch."
+            result["hint"] = hint
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _rrf_merge(runs, limit):
+        """RRF 60 + collapse per target + deterministischer Tiebreak — SPEC §3.3."""
+        pool: dict = {}
+        for hits in runs:
+            for hit in hits:
+                key = hit.get("target") or "content:%s" % (hit.get("content") or "")
+                entry = pool.setdefault(key, {
+                    "backend": hit.get("backend"), "kind": hit.get("kind"),
+                    "content": hit.get("content"), "target": hit.get("target"),
+                    "ts": hit.get("ts"), "score": 0.0, "found_by": []})
+                entry["score"] += 1.0 / (60.0 + max(1, int(hit.get("rank") or 99)))
+                entry["found_by"].append(hit.get("mode"))
+        merged = sorted(pool.values(),
+                        key=lambda e: (-e["score"], str(e.get("ts") or ""),),
+                        )[:limit]
+        for e in merged:
+            e["found_by"] = sorted({m for m in e["found_by"] if m})
+        return merged
+
+    def _touch_facts(self, merged):
+        """hits++ on returned fact rows, grouped per backend (Heat = report basis)."""
+        by_backend: dict = {}
+        for hit in merged:
+            if hit.get("kind") != "fact":
+                continue
+            tid = str(hit.get("target") or "").rsplit(":", 1)[-1]
+            try:
+                by_backend.setdefault(hit.get("backend"), []).append(int(tid))
+            except ValueError:
+                continue
+        for bname, ids in by_backend.items():
+            engine = self._rack.get(bname)
+            if engine is not None and callable(getattr(engine, "touch", None)):
+                try:
+                    engine.touch(ids)
+                except Exception as exc:
+                    _LOG.warning("memrack touch failed (%s): %s", bname, exc)
+
+    # ── write: agent chooses the backend (SPEC §1.1/§1.2) ──
+    def _tool_write(self, args):
+        content = str(args.get("content") or "").strip()
+        kind = args.get("kind") or EXPLICIT
+        backend_wish = args.get("backend") or None
+        tags = args.get("tags") if isinstance(args.get("tags"), list) else None
+        if not content:
+            return json.dumps({"error": "content required"});
+        if backend_wish and backend_wish not in self._rack:
+            return json.dumps({"error": "unknown backend %r" % backend_wish,
+                               "hint": "Registriert: %s" % ", ".join(sorted(self._rack))},
+                              ensure_ascii=False)
+        backend = self._rack.get(backend_wish) if backend_wish else \
+            self._routed_for_kind(kind)   # keine Wahl = deterministische Quelle-Regel
+        if backend is None:
+            return json.dumps({"error": "kein Backend für kind %r im Rack" % kind,
+                               "hint": "memrack_status zeigt die Karten"})
+        write_fn = getattr(backend, "write", None)
+        if not callable(write_fn):
+            return json.dumps({
+                "error": "backend %r trägt keinen atomaren Write" % backend.name,
+                "hint": "Strukturwissen gehört als Wiki-Seite (Datei-Tools); "
+                        "atomare Fakten: memrack_write ohne backend-Param.",
+            }, ensure_ascii=False)
+        try:
+            result = write_fn(kind, content, tags=tags, session_id=self._session_id)
+        except Exception as exc:
+            return json.dumps({"error": "write failed: %s: %s" % (type(exc).__name__, exc)},
+                              ensure_ascii=False)
+        self._log_route("memrack_write", kind, backend.name)
+        return json.dumps(result, indent=2, ensure_ascii=False)
 
     # ── inventory ──
     def status(self) -> dict:
         return {
             "plugin": PLUGIN_NAME,
             "version": __version__,
-            "backends": {b: self._rack[b].export() for b in sorted(self._rack)},
+            "cards": self._cards,
+            "backends": sorted(self._rack),
+            "gap_list": self._gaps,
+            "parked": self._parked,
             "docking_errors": self._load_errors,
             "active_backend": self._active.name if self._active else None,
             "forced_backend": self._config.get("backend"),
-            "route_table": dict(ROUTE_TABLE),
+            "enabled_builtins": self._config.get("enabled_backends", list(_DEFAULT_ENABLED)),
             "session_id": self._session_id,
         }
+
+
+_TOOL_DESCRIPTIONS = {
+    "memrack_search": "Suche im memory-rack: hybrid fan-out über alle Backends und Suchmodi "
+                      "(default mode=all), oder gezielt ein Backend/Modus. Liefert Treffer mit "
+                      "target-Referenzen (wiki-Pfad/L42 etc.) zum ganzseitigen Weiterlesen.",
+    "memrack_write": "Speichert ein atomares Fact (ein Satz) im memory-rack; der Agent wählt "
+                     "die Ziel-Backend anhand der Rack-Karte (default: base-db). Strukturwissen "
+                     "gehört in Wiki-Seiten (Datei-Tools), nicht hierher.",
+    "memrack_status": "Rack-Inventar: Backends mit Card (best_for/limits/modes), Heat-Zähler, "
+                      "Gaps (ausgefallene Engines), geparkte/dockings-Fehler.",
+}
 
 
 def register(ctx):

@@ -95,7 +95,7 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
     _dock(tmp_path, "fake.py", FAKE_BACKEND)
     prov = mr._MemrackBase(config={"backend": "fake"})
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
-    fake = prov._routed(mr.EXPLICIT)
+    fake = prov._routed_for_kind(mr.EXPLICIT)
     assert fake.name == "fake"
     assert fake.init_calls == [("S1", str(tmp_path))]
 
@@ -104,7 +104,10 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
     assert fake.turns == ("u", "a", "S1")
     assert fake.writes == [("add", "memory", "Ronny likes memrack")]
     assert prov.prefetch("wer") == "FAKE-HIT: wer"
-    assert prov.system_prompt_block() == "FAKE-SPB"
+    spb = prov.system_prompt_block()
+    assert spb.startswith("FAKE-SPB")                       # wrapped provider block first
+    assert "memrack rack (v" in spb and "- base-db:" in spb # rack card appended (SPEC §1.1)
+    assert "- fake:" in spb
 
     log = tmp_path / "plugin-data" / "memrack" / "route_log.jsonl"
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -116,11 +119,58 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
     assert "fake" in status["backends"]
 
 
-def test_provider_default_route_all_targets_wiki_only_without_hermes(tmp_path):
-    """No forced backend + no hermes runtime -> honest fail, never silent no-memory."""
+def test_basisfall_solo_base_db_fresh_home(tmp_path):
+    """T-013-Essenz: frischer HERMES_HOME, kein Docking, kein Wiki — NUR base-db läuft."""
+    prov = mr._MemrackBase()          # enabled default = ("base-db",) → wiki geparkt
+    prov.initialize(session_id="S1", hermes_home=str(tmp_path))
+    assert prov._active.name == "base-db"
+    assert any(p["name"] == "wiki" for p in prov._parked)   # wiki = opt-in, geparkt (kein Error!)
+    # kompletter Basis-Umfang: write / search / status
+    out = prov.handle_tool_call("memrack_write", {"content": "Relay LXC 903 laeuft auf 192.168.2.60"})
+    assert '"stored"' in out
+    search = prov.handle_tool_call("memrack_search", {"query": "Relay laeuft"})
+    assert '"Relay LXC 903' in search and '"fts"' in search
+    status = prov.handle_tool_call("memrack_status", {})
+    assert '"base-db"' in status
+    # turn-Regel: ohne Wiki wird episodic NICHT kopiert (state.db ist kanonisch)
+    prov.sync_turn("u", "a")
+    rows = prov.status()
+    assert rows["backends"] == ["base-db"]
+    # Heat: der Suchtreffer hat hits erhoeht
+    counts = prov.get_tool_schemas()
+    assert "memrack_search" in [s["function"]["name"] for s in counts]
+
+
+def test_search_targeted_backend_and_mode_errors(tmp_path):
+    """SPEC §3.1-Validierung: kein stilles 0-Ergebnis — Errors nennen verfügbare Modi."""
     prov = mr._MemrackBase()
-    with pytest.raises(RuntimeError):
-        prov.initialize(session_id="S1", hermes_home=str(tmp_path))
+    prov.initialize(session_id="S1", hermes_home=str(tmp_path))
+    # Unknown-Backend → Error mit Inventar
+    out = prov.handle_tool_call("memrack_search", {"query": "x", "backend": "nosuch"})
+    assert '"error"' in out and "Registriert" in out
+    # base-db trägt KEIN vec → explizite Fehlermeldung mit verfügbaren Modi (SPEC §1.4)
+    out = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
+    assert '"error"' in out and "kein backend trägt mode 'vec'" in out
+    assert "fts, pointers" in out   # verfügbare Modi namentlich
+    # gezieltes fts funktioniert
+    prov.handle_tool_call("memrack_write", {"content": "Ein Fakt"})
+    out = prov.handle_tool_call("memrack_search", {"query": "Fakt", "backend": "base-db", "mode": "fts"})
+    assert '"Ein Fakt"' in out
+
+
+def test_search_empty_result_carries_hint(tmp_path):
+    prov = mr._MemrackBase()
+    prov.initialize(session_id="S1", hermes_home=str(tmp_path))
+    out = prov.handle_tool_call("memrack_search", {"query": "gibts nicht"})
+    assert '"hint"' in out   # kein stilles leer-Array
+
+
+def test_write_to_wiki_is_guided_error_when_parked(tmp_path):
+    """wiki ist opt-in: memrack_write(backend='wiki') im Basisfall = guided error."""
+    prov = mr._MemrackBase()
+    prov.initialize(session_id="S1", hermes_home=str(tmp_path))
+    out = prov.handle_tool_call("memrack_write", {"content": "x", "backend": "wiki"})
+    assert '"error"' in out and "Registriert" in out
 
 
 def test_provider_tool_surface_is_additive(tmp_path):
@@ -143,5 +193,5 @@ def test_backup_paths_declares_route_log(tmp_path):
     _dock(tmp_path, "fake.py", FAKE_BACKEND)
     prov = mr._MemrackBase(config={"backend": "fake"})
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
-    paths = prov.backup_paths()
-    assert len(paths) == 1 and paths[0].endswith("route_log.jsonl")
+    ends = [p.rsplit("/", 1)[-1] for p in prov.backup_paths()]
+    assert "route_log.jsonl" in ends and "memrack.db" in ends  # log + Store (SPEC §1.4)

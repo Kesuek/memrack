@@ -10,11 +10,11 @@ spec.loader.exec_module(mr)
 sys.modules["memrack"] = mr
 
 
-def test_route_table_known_types_target_wiki():
-    assert mr.route(mr.EXPLICIT) == "wiki"
-    assert mr.route(mr.EPISODIC) == "wiki"
-    assert mr.route(mr.SEMANTIC) == "wiki"
-    assert mr.route(mr.CURATION) == "wiki"
+def test_route_table_known_types_target_default():
+    assert mr.route(mr.EXPLICIT) == "base-db"
+    assert mr.route(mr.EPISODIC) == "base-db"
+    assert mr.route(mr.SEMANTIC) == "base-db"
+    assert mr.route(mr.CURATION) == "base-db"
 
 
 def test_route_unknown_type_falls_back_to_default():
@@ -28,21 +28,6 @@ def test_memory_write_actions_classify_as_explicit():
     assert table["replace"] == mr.EXPLICIT
     assert table["remove"] == mr.EXPLICIT
     assert table.get("relevance_judgement") is None  # the Dreaming lesson
-
-
-def test_pick_backend_matches_write_types():
-    class Fts:
-        name = "fts"
-        write_types = ("explicit", "episodic")
-
-    class Vec:
-        name = "vec"
-        write_types = ("semantic",)
-
-    fts, vec = Fts(), Vec()
-    assert mr.pick_backend([fts, vec], mr.SEMANTIC) is vec
-    assert mr.pick_backend([fts, vec], mr.EXPLICIT) is fts
-    assert mr.pick_backend([fts], mr.SEMANTIC) is None
 
 
 def test_write_types_are_plain_strings():

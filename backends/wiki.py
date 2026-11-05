@@ -53,6 +53,14 @@ class WikiBackend:
         if self._prov:
             self._prov.shutdown()
 
+    def handle_tool_call(self, tool_name, args, **kwargs):
+        """Pass-through: the wrapped provider's own tools stay reachable."""
+        if self._prov is not None:
+            fn = getattr(self._prov, "handle_tool_call", None)
+            if fn is not None:
+                return fn(tool_name, dict(args or {}), **kwargs)
+        raise KeyError("wiki backend carries no tool %r" % tool_name)
+
     def export(self):
         return {
             "name": self.name,
