@@ -30,7 +30,7 @@ have.
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.3.0 (39 tests green, vec verified against a live ollama)
+## Status — v0.4.0 (60 tests green; includes the backend SDK)
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
 - [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
@@ -45,8 +45,10 @@ have.
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
       ("registered (next session)" in `memrack_status`)
-- [ ] backend SDK + conformance harness (planned T-015: base class, `check_backend`,
-      template + guide — target: a foreign backend 0→docked in <15 min)
+- [x] backend SDK (T-015): `memrack.sdk.MemrackBackend` base (fts5/lock/degrade lessons
+      pre-built, OPTIONAL — duck-typing remains the law), `memrack.conformance`
+      (`check_backend`/`assert_conformance` + standalone runner), `backends/_template.py`
+      + `BACKEND_GUIDE.md` — target: foreign backend 0→docked in <15 min
 - [ ] heat report CLI (`hermes memrack report` — provider CLI, surfaces only when active)
 - [ ] catalog submission
 
@@ -84,10 +86,11 @@ A backend is any module exposing `export_backend()` returning an object with:
 | `write(kind, content, tags=, session_id=)` | *optional* — atomic fact store; without it `memrack_write` answers a guided error |
 | `touch(ids)` | *optional* — heat counter (hits++), the report basis |
 
-Write kinds: `explicit`, `episodic`, `semantic`, `curation`. The AGENT chooses
-the destination per write (`backend=?` in `memrack_write`); kinds only drive the
-deterministic fallback and the default. A write goes to exactly ONE backend —
-no fan-out writes.
+Write kinds: `explicit`, `curated` — that is ALL memrack stores atomically. `episodic`
+stays Hermes-native (state.db is canonical); `semantic` is a search MODE (the vec
+engine), never a write kind. The AGENT chooses the destination per write
+(`backend=?` in `memrack_write`); kinds only drive the deterministic fallback.
+A write goes to exactly ONE backend — no fan-out writes.
 
 ## Design principles
 
