@@ -200,6 +200,43 @@ class _MemrackBase:
     def name(self) -> str:
         return PLUGIN_NAME
 
+    # ABC-PFLICHT (fehlte der Skill-ABC-Referenz!): Konfiguration/Deps-Gate, KEINE Netz-Calls.
+    # Die Basis-Basis (stdlib, SQLite) braucht nichts — immer bereit.
+    def is_available(self) -> bool:
+        return True
+
+    # T-014-Substanz: der Setup-Flow (`hermes memory setup memrack`) liest und schreibt diese
+    def get_config_schema(self):
+        return [
+            {
+                "key": "backend",
+                "description": "Force ONE backend for ALL routes (migration/transition override)",
+                "default": "",
+                "choices": ["", DEFAULT_BACKEND, "wiki"],
+            },
+            {
+                "key": "enabled_backends",
+                "description": "Which built-ins are in the rack (default: base-db only; wiki = opt-in migration bridge)",
+                "default": list(_DEFAULT_ENABLED),
+                "choices": [list(_DEFAULT_ENABLED), ["base-db", "wiki"]],
+            },
+            {
+                "key": "embedding_model",
+                "description": "Ollama embedding model for the optional vec engine",
+                "default": "nomic-embed-text",
+            },
+            {
+                "key": "ollama_host",
+                "description": "Ollama endpoint for vec embeddings",
+                "default": "http://127.0.0.1:11434",
+            },
+            {
+                "key": "search_top_k",
+                "description": "Default result count for memrack_search (max 32)",
+                "default": 8,
+            },
+        ]
+
     def __init__(self, config=None):
         self._config = dict(config or {})
         self._session_id = ""
@@ -473,7 +510,7 @@ class _MemrackBase:
         query = str(args.get("query") or "").strip()
         mode = args.get("mode") or "all"
         backend_wish = args.get("backend") or None
-        limit = max(1, min(int(args.get("limit") or 8), 32))
+        limit = max(1, min(int(args.get("limit") or self._config.get("search_top_k") or 8), 32))
         if not query:
             return json.dumps({"error": "query required",
                                "hint": "Was suchst du? Ein Stichwort reicht, z.B. 'Relay Port'"},
@@ -668,7 +705,7 @@ def register(ctx):
         class MemoryProvider:
             pass
 
-    class _BoundMemrackProvider(MemoryProvider, _MemrackBase):
+    class _BoundMemrackProvider(_MemrackBase, MemoryProvider):
         pass
 
     ctx.register_memory_provider(_BoundMemrackProvider())
