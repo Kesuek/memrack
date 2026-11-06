@@ -283,15 +283,29 @@ class _MemrackBase:
 
     # ── lifecycle ──
     def _profile_config(self, hermes_home) -> dict:
-        """plugins.memrack.* aus der PROFIL-Config-Datei — der Provider ist zur
+        """`plugins.memrack.*` aus der PROFIL-Config-Datei — der Provider ist zur
         Register-Zeit config-los geladen (der Manager injiziert nichts); die
-        Datei ist die live-Quelle (die wiki-memory-Convention)."""
+        Datei ist die live-Quelle (die wiki-memory-Convention).
+        T-014a: zweite Quelle = die DESKTOP-declared Surface (storage=flat_json,
+        `<hermes_home>/<name>/config.json`, 0600) — die UI schreibt NUR dorthin;
+        ihre Keys gewinnen (frischeste Nutzer-Intention), yaml-only Keys bleiben."""
+        merged: dict = {}
         try:
             import yaml
             raw = yaml.safe_load((Path(hermes_home) / "config.yaml").read_text(encoding="utf-8")) or {}
-            return dict((raw.get("plugins") or {}).get(PLUGIN_NAME) or {})
+            merged.update(dict((raw.get("plugins") or {}).get(PLUGIN_NAME) or {}))
         except Exception:
-            return {}
+            pass          # kaputtes yaml darf die Desktop-Config nicht töten
+        try:
+            import json
+            flat = _hermes_home(hermes_home) / PLUGIN_NAME / "config.json"
+            if flat.is_file():
+                data = json.loads(flat.read_text(encoding="utf-8-sig"))
+                if isinstance(data, dict):
+                    merged.update({k: v for k, v in data.items() if k})
+        except Exception as exc:
+            _LOG.warning("memrack flat_json config unreadable (%s): %s", flat.parent, exc)
+        return merged
 
     def save_config(self, values, hermes_home=None):
         """T-014: setup-consumer contract — the wizard hands values back; write the
@@ -309,6 +323,29 @@ class _MemrackBase:
             config_path.write_text(
                 yaml.dump(existing, default_flow_style=False, allow_unicode=True),
                 encoding="utf-8")
+
+            # T-014a Mirror: die Desktop-Panel-Quelle mitführen (merge, 0600),
+            # sonst zeigt die UI nach einem Wizard-Setup die Defaults statt den Zustand.
+            import json
+            flat_dir = _hermes_home(hermes_home) / PLUGIN_NAME
+            flat_dir.mkdir(parents=True, exist_ok=True)
+            flat = flat_dir / "config.json"
+            current = {}
+            if flat.is_file():
+                try:
+                    current = json.loads(flat.read_text(encoding="utf-8-sig")) or {}
+                except Exception:
+                    current = {}
+            if isinstance(current, dict):
+                current.update(dict(values or {}))
+                tmp = flat.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(current, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+                os.replace(tmp, flat)
+                try:
+                    os.chmod(flat, 0o600)
+                except OSError:
+                    pass
         except Exception as exc:
             _LOG.warning("memrack save_config failed (%s): %s",
                          config_path, exc)
