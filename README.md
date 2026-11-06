@@ -26,11 +26,11 @@ have.
   `backends.d/<name>.yaml` manifest (`name`, `module`, `best_for`, `limits`,
   `search`) plus its module; `rm` the manifest = unregistered, a
   `disabled-` prefix = parked. Legacy code-first `.py` drop-ins still work;
-  pip entry points come later (v0.3+)
+  pip entry points come later (v0.4+)
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.1.0 skeleton
+## Status — v0.3.0 (39 tests green, vec verified against a live ollama)
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
 - [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
@@ -38,11 +38,16 @@ have.
 - [x] Rack cards (`best_for`/`limits`/`search` — manifest data for docked, attrs for built-ins)
 - [x] `memrack_write` / `memrack_search` / `memrack_status` — agent routing,
       fan-out with RRF merge, target collapse, guided empty-hints, honest mode-errors
-- [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked)
-- [ ] vec engine (sqlite-vec + nomic-embed-text, optional upgrade)
-- [ ] wiki search engine (in-memory FTS over markdown pages)
-- [ ] bridge-adapter-style manifest registry polish (T-003): status surfaces
-- [ ] heat report CLI (`memrack report`)
+- [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked) —
+      now with a page search engine (`WikiIndex`, stdlib-only: mtime-diff pass, L<n>-targets, snippets)
+- [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, incremental embed pass,
+      honest degrade (fts-only + gap note) when the env lacks it
+- [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
+      2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
+      ("registered (next session)" in `memrack_status`)
+- [ ] backend SDK + conformance harness (planned T-015: base class, `check_backend`,
+      template + guide — target: a foreign backend 0→docked in <15 min)
+- [ ] heat report CLI (`hermes memrack report` — provider CLI, surfaces only when active)
 - [ ] catalog submission
 
 ## Install (experimental, not yet published)
@@ -55,8 +60,8 @@ rsync -a --exclude .git memrack/ $HERMES_HOME/plugins/memrack/
 hermes config set memory.provider memrack   # experimental — see below
 ```
 
-Do not switch productive profiles before v0.2 verification. The plugin is
-inactive unless `memory.provider` names it.
+Do not switch a productive profile before the test-profile activation run has
+passed. The plugin is inactive unless `memory.provider` names it.
 
 ## The rack contract (for backend authors)
 
@@ -79,8 +84,10 @@ A backend is any module exposing `export_backend()` returning an object with:
 | `write(kind, content, tags=, session_id=)` | *optional* — atomic fact store; without it `memrack_write` answers a guided error |
 | `touch(ids)` | *optional* — heat counter (hits++), the report basis |
 
-Write types: `explicit`, `episodic`, `semantic`, `curation`. The router maps
-each type to exactly ONE primary backend — no fan-out writes.
+Write kinds: `explicit`, `episodic`, `semantic`, `curation`. The AGENT chooses
+the destination per write (`backend=?` in `memrack_write`); kinds only drive the
+deterministic fallback and the default. A write goes to exactly ONE backend —
+no fan-out writes.
 
 ## Design principles
 
