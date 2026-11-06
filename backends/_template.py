@@ -15,6 +15,10 @@ Dock via a manifest beside it:
 
 import sqlite3
 import threading
+
+def _utcnow_iso():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 from pathlib import Path
 
 # SDK: OPTIONAL. If the sdk is importable, inherit the lessons; else pure duck-type.
@@ -54,29 +58,43 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
         base.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(base / "template-backend.db"),
                                    check_same_thread=False, timeout=5.0)
-        # UNIQUE = die Ledger-Idepotenz (kein Doppel-Row bei gleichem Inhalt)
+        # UNIQUE = die Ledger-Idempotenz (kein Doppel-Row bei gleichem Inhalt);
+        # ts = UTC-Z-µs (Gesetzt 1); hits = Heat (Gesetze 2: fact-hits TRAGEN hits)
         self._db.execute("CREATE TABLE IF NOT EXISTS notes"
-                         "(id INTEGER PRIMARY KEY, text TEXT, hash TEXT UNIQUE)")
+                         "(id INTEGER PRIMARY KEY, text TEXT, hash TEXT UNIQUE,"
+                         " ts TEXT, hits INTEGER DEFAULT 0)")
         self._db.commit()
 
     def search(self, query, mode, k, session_id=""):
         if mode != "fts":
             raise ValueError("template carries fts only")
         rows = self._db.execute(
-            "SELECT id, text FROM notes").fetchall()
+            "SELECT id, text, ts, hits FROM notes").fetchall()
         tokens = [t.lower() for t in fts_match_tokens(query).replace('"', '').split()]
+        # Hit = die GANZE Row-Referenz (kind=fact: content klein ok); hits/ts = Gesetze 1+2
         ranked = [({"backend": self.name, "kind": "fact", "rank": i,
-                    "content": text, "target": "template:%d" % rid, "ts": ""})
-                  for i, (rid, text) in enumerate(
+                    "content": text, "target": "template:%d" % rid,
+                    "ts": ts, "hits": hits})
+                  for i, (rid, text, ts, hits) in enumerate(
                       [r for r in rows if any(t in r[1].lower() for t in tokens)], 1)]
         return ranked[:k]
+
+    def touch(self, ids):
+        """Gesetzt 2 die andere Richtung: hit-rauf nach der Merge-Auslieferung."""
+        if not ids:
+            return
+        with self._lock:
+            self._db.executemany("UPDATE notes SET hits = hits + 1 WHERE id = ?",
+                                 [(i,) for i in ids])
+            self._db.commit()
 
     def write(self, kind, content, tags=None, session_id=""):
         import hashlib
         hash_ = hashlib.sha256(content.encode("utf-8")).hexdigest()
         with self._lock:
             cur = self._db.execute(
-                "INSERT OR IGNORE INTO notes(text, hash) VALUES (?, ?)", (content, hash_))
+                "INSERT OR IGNORE INTO notes(text, hash, ts) VALUES (?, ?, ?)",
+                (content, hash_, _utcnow_iso()))
             if cur.rowcount == 0:   # dedupe: bestehend gewinnt, kein Doppel-Row
                 rid = self._db.execute("SELECT id FROM notes WHERE hash=?", (hash_,)).fetchone()[0]
                 return {"status": "duplicate", "id": rid, "target": "template:%d" % rid}
@@ -89,10 +107,10 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
             return self.write("explicit", content, session_id=session_id)
 
     def export(self):
+        n = (self._db.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+             if self._db else 0)
         return {"name": self.name, "best_for": self.best_for, "limits": self.limits,
-                "search": list(self.search_modes), "write": self.writeable,
-                "n": self._db.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-                    if self._db else 0}
+                "search": list(self.card_modes()), "write": self.writeable, "n": n}
 
 
 def export_backend():

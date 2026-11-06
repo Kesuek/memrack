@@ -1,0 +1,5 @@
+name: dirsearch
+module: dirsearch.py
+best_for: Wiederauffinden einzelner Zeilen in Markdown-/Textdatei-Bestaenden (Konfig-Verzeichnisse) ueber Full-Text-Termsuche.
+limits: read-only (kein write, kein Heat-Counter); kein Vec/Index — Scan pro Query; braucht provider_config['root'], sonst unbrauchbar.
+search: [fts]

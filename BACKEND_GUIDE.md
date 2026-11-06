@@ -12,7 +12,7 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
 | `best_for` / `limits` (attrs) | card | what the agent sees — one sentence each |
 | `initialize(session_id=, hermes_home=, provider_config=, **kw)` | yes | once per session; storage under `<hermes_home>/plugin-data/memrack/` |
 | `on_turn / on_memory_write / on_session_end / prefetch / system_prompt_block / shutdown` | hooks | no-op defaults are legal |
-| `search(query, mode, k) -> [hit]` | engine (optional) | ranked hits; hit = `{backend, kind, rank, target, ts}` (reference, never content copy) |
+| `search(query, mode, k) -> [hit]` | engine (optional) | ranked hits; hit = `{backend, kind, rank, target, ts}`; fact-hits ALSO carry `hits` (heat law); optional extras (`snippet`, `content`, `distance`) are LEGAL. **kind vocabulary: `fact` = rows YOUR OWN store holds (heat-counted), `page` = your own markdown whole-pages, `pointer` = reference hits over FOREIGN files/bodies (writeless backends — no heat obligate). The target identifies ONE entry (the collapse law!)** |
 | `write(kind, content, tags=, session_id=) -> {status, id, target}` | engine (optional) | atomic fact store; hash-dedupe = idempotence law |
 | `touch(ids)` | engine (optional) | heat counter, the report basis |
 | `export_backend()` at MODULE level | yes | what the registry instantiates |
@@ -21,9 +21,14 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
 
 1. **Copy the template** `backends/_template.py` out of the repo, rename the class +
    `name`, fill the card (`best_for`, `limits`, `search_modes`).
-2. **Prove it**: `python -m memrack.conformance <your>_<file>.py` (from the repo
-   checkout) — or in pytest: `from memrack.conformance import assert_conformance`.
-   The run checks structure + card honesty + write/idempotence/search smoke.
+2. **Prove it**: `python -m memrack.conformance <your_file>.py [scratch_home]`
+   from the repo checkout — arg 2 is a scratch HERMES_HOME for the smoke's temp
+   storage (default: a /tmp probe dir; use your repo's scratch, NEVER a live home).
+   A sibling `<stem>.yaml`/`<name>.yaml` manifest is APPLIED like docking would:
+   claims are verified, the report shows `card_source` and any
+   `declared_not_armed` modes. A `RuntimeWarning` about
+   `'memrack.conformance' found in sys.modules` is a known repo-layout artifact —
+   ignorable. pytest alternative: `assert_conformance(obj)`.
 3. **Dock it**: drop the file into
    `$HERMES_HOME/plugins/memrack/backends.d/` + a manifest `<name>.yaml`
    (`name`, `module` required; `best_for`, `limits`, `search` optional — manifest
@@ -44,9 +49,11 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
 4. **Subclassing the ABC via a mixin: mixin base FIRST** —
    `class Bound(MixinBase, MemoryProvider)` — the ABC-first order shadows
    implementations with declarations (the MRO-shadow lesson, proven live).
-5. **`is_available()` is an ABC obligation** (`agent/memory_provider.py:117`,
-   abstract) — config/deps gate, no network in it. `get_config_schema()` is what
-   `hermes memory setup` reads.
+5. **Layer-split**: the `is_available()`/`get_config_schema()` obligations belong to the
+   PROVIDER layer only (memrack's own `__init__.py` carries them against the Hermes
+   ABC) — a BACKEND module under backends.d/ does NOT need them. What BACKENDS owe:
+   the contract table above + the card."
+
 
 ## The design laws you inherit (non-negotiable)
 
@@ -60,6 +67,14 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
   go into backends.
 - **No server DB without a documented trigger** (multi-host access, scale evidence,
   benchmark win, or another project's need) — embedded first is the project stance.
+
+## Worked example
+
+**`contrib/dirsearch.py`** (with its manifest) — a real, guide-only-built backend
+(built by a fresh author in ~2 minutes using ONLY this guide + the template;
+conformance green on first run). It searches a configurable markdown/text dir
+(`provider_config['root']`), honest empty card without a root, UTC-Z ts on
+file mtimes, `pointer`-kind hits. Copy it to backends.d/ + manifest to use.
 
 ## Pitfalls pre-built in the SDK (reuse, don't relearn)
 

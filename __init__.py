@@ -131,8 +131,12 @@ def _card(backend) -> dict:
     """The card the agent sees: manifest data wins over code attrs (both verified at load)."""
     man = getattr(backend, "manifest", None) or {}
     dyn = getattr(backend, "card_modes", None)
-    modes = man.get("search") or (tuple(dyn()) if callable(dyn)
-                                 else tuple(getattr(backend, "search_modes", ())))
+    live = tuple(dyn()) if callable(dyn) else None
+    declared = tuple(man.get("search") or ())
+    # Beweis-Lektion (SDK-Nachweis #4): die Karte verspricht NIE mehr als die LIEFERUNG —
+    # der Manifest kann sie NICHT über die ehrliche (Umgebungs-)Karte hinaus überzeugen.
+    modes = (live if live is not None
+             else (declared or tuple(getattr(backend, "search_modes", ()))) )
     best_for = man.get("best_for") or getattr(backend, "best_for", "")
     lim = man.get("limits") or getattr(backend, "limits", "")
     return {
@@ -144,6 +148,7 @@ def _card(backend) -> dict:
         "search": callable(getattr(backend, "search", None)),
         "built_in": getattr(backend, "built_in", False),
         "origin": (man.get("module") or "code") if man else "code",
+        "declared": sorted(set(declared) - set(modes)),   # Manifest-Promisse OHNE Auslieferung (env)
     }
 
 
@@ -422,11 +427,15 @@ class _MemrackBase:
         lines = ["memrack rack (v%s): wähle Ziele bewusst bei memrack_write;" % __version__]
         for bname in sorted(self._cards):
             c = self._cards[bname]
-            lines.append("- %s: %s | search: %s%s%s" % (
+            extra = ""
+            if c.get("declared"):
+                extra = " | deklariert-ohne-Auslieferung: %s" % ",".join(c["declared"])
+            lines.append("- %s: %s | search: %s%s%s%s" % (
                 bname, c["best_for"] or "",
                 ",".join(c["modes"]) or "none",
                 "" if c["write"] else " | kein atomarer Write",
-                " (built-in)" if c["built_in"] else ""))
+                " (built-in)" if c["built_in"] else "",
+                extra))
         if len(lines) > 9:
             overflow = len(self._cards) - 8
             lines = lines[:9] + ["- … +%d weitere Backends — memrack_status" % overflow]
