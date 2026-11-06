@@ -39,6 +39,11 @@ def test_stage0_basisfall_solo(tmp_path):
     # status: eine Card, geparktes wiki sichtbar, pending_docks leer
     st = json.loads(prov.handle_tool_call("memrack_status", {}))
     assert "base-db" in st["cards"] and any(p["name"] == "wiki" for p in st["parked"])
+    # B-7: prefetch lebt im Basisfall (kein Crash, kein Search-Noise-Spam)
+    assert isinstance(prov.prefetch("anything"), str)
+    block = prov.system_prompt_block()
+    assert "memrack rack (v" in block and "- base-db:" in block
+    assert "route_log" not in block
 
 
 def test_stage1_docked_backend_broken_is_gap_not_death(tmp_path):

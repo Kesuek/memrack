@@ -13,6 +13,7 @@ The Basisfall is design law: with only the built-in `base-db` backend
 """
 
 import importlib.util
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,12 @@ _SEARCH_MODES = ("fts", "vec", "pointers")
 
 _MEMORY_WRITE_TYPES = tuple(
     (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
+
+
+def _utcnow_iso():
+    """UTC, Mikrosekunden, Z-Suffix — String-Vergleich über Backends hinweg konsistent (A-5)."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 #
 # ── backend registry ─────────────────────────────────────────────────────────
 
@@ -329,7 +336,7 @@ class _MemrackBase:
         if not self._route_log:
             return
         entry = json.dumps({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            "ts": _utcnow_iso(),
             "kind": kind, "detail": detail, "backend": backend,
             "session_id": self._session_id,
         }, ensure_ascii=False)
@@ -653,8 +660,12 @@ class _MemrackBase:
             file_imported = file_dup = 0
             for entry in entries:
                 try:
+                    # S-3-HARDENING: das Target identifiziert DEN EINTRAG, NICHT die Datei —
+                    # der RRF-Merge collapsed per target: ein File-Full-Target würde
+                    # N-1 Treffer stillschweigend verschluckt.
+                    tag_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()[:8]
                     out = backend.write(EXPLICIT, entry,
-                                        target_hint="%s" % prefix,
+                                        target_hint="%s#%s" % (prefix, tag_hash),
                                         tags=["import:" + fname])
                     if out.get("status") == "stored":
                         report["imported"] += 1

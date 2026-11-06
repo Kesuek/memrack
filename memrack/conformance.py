@@ -58,10 +58,14 @@ def check_backend(obj, *, tmp_home=None) -> dict:
                 for mode in [m for m in ("fts",) if m in modes]:
                     hits = obj.search(probe_text.split()[0], mode, 5) or []
                     for hit in hits:
-                        for field in ("backend", "kind", "rank", "target"):
+                        for field in ("backend", "kind", "rank", "target", "ts"):
                             if field not in hit:
                                 _err(errors, "hit-shape", "hit misses %r" % field)
                                 break
+                        if hit.get("kind") == "fact" and "hits" not in hit:
+                            warnings.append(
+                                "hit-shape: fact-hit ohne 'hits' verliert den "
+                                "Heat-Tiebreak still (A-6) — Feld liefern")
             obj.shutdown()
         except NotImplementedError as exc:
             _err(errors, "contract", "initialize NotImplementedError: %s" % exc)

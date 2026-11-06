@@ -23,6 +23,11 @@ from pathlib import Path
 
 _LOG = logging.getLogger("memrack.base-db")
 
+
+def _utcnow_iso():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
 PLUGIN_NAME = "base-db"
 
 _SCHEMA = """
@@ -62,7 +67,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[768]);
 class BaseDbBackend:
     name = PLUGIN_NAME
     best_for = "atomare Fakten + Mirror von memory-writes; exakte Nachfrage in Millisekunden"
-    limits = "EIN Satz pro Row, keine Prosa; kein Prosa-Store; vec nur wenn sqlite-vec+ollama ver\u00fcgbar"
+    limits = "EIN Satz pro Row beim Write; Import erlaubt mehrsätzliche Alt-Rows (tags import:); vec nur wenn sqlite-vec+ollama ver\u00fcgbar"
     search_modes = ("fts", "pointers")   # STATIC floor; card_modes() reports the DYNAMIC set
     writeable = True
     write_types = ("explicit", "episodic", "semantic", "curation")  # accepts everything routed at it
@@ -130,7 +135,7 @@ class BaseDbBackend:
             raise ValueError("empty content")
         hash_ = hashlib.sha256(content.encode("utf-8")).hexdigest()
         meta = json.dumps({"tags": tags or []}, ensure_ascii=False)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        now = _utcnow_iso()
         with self._lock:
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO facts(ts, kind, content, target, source, session_id,"
@@ -154,7 +159,7 @@ class BaseDbBackend:
         subject, location = (subject or "").strip(), (location or "").strip()
         if not (subject and location):
             raise ValueError("pointer needs subject AND location")
-        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        now = _utcnow_iso()
         with self._lock:
             self._db.execute(
                 "INSERT INTO pointers(subject, location, kind, ts, checked)"

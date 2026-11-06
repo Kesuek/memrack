@@ -20,6 +20,12 @@ _LOG = logging.getLogger("memrack.wiki")
 _TOKEN = re.compile(r"[\w\-\.\:/]+", re.UNICODE)
 
 
+def _utcnow_iso():
+    """UTC, Mikrosekunden, Z-Suffix — die ts-Norm des Merges (third-man A-5)."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
 class WikiIndex:
     """In-memory page index over a markdown tree. Pure stdlib, testable standalone."""
 
@@ -73,7 +79,7 @@ class WikiIndex:
         tokens = [t.lower() for t in _TOKEN.findall(query or "") if len(t) > 1]
         if not tokens:
             return []
-        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        now = _utcnow_iso()
         scored = []
         for rel, (_mtime, text) in snapshot.items():
             lines = text.splitlines()

@@ -31,6 +31,23 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
 4. **See it live**: next session's `memrack_status` lists your card;
    `memrack_search(backend="<name>")` targets it explicitly.
 
+## Contract laws the registry and merge expect (post-R2, binding)
+
+1. **ts = UTC-Z with microseconds** (`2026-11-06T01:25:16.123456Z`) — the merge
+   tiebreak compares ts as STRINGS; a zone-less local backend breaks chronology
+   silently the moment a second backend writes from another zone.
+2. **Fact-hits carry `hits`** (the row's heat counter) — without it your backend
+   loses the heat tiebreak silently against base-db. Conformance warns.
+3. **target identifies the ENTRY, not the file** — the RRF collapse merges by
+   target; a collective target would swallow N−1 of your hits. Import/one-shot
+   loads suffix per entry (hash8).
+4. **Subclassing the ABC via a mixin: mixin base FIRST** —
+   `class Bound(MixinBase, MemoryProvider)` — the ABC-first order shadows
+   implementations with declarations (the MRO-shadow lesson, proven live).
+5. **`is_available()` is an ABC obligation** (`agent/memory_provider.py:117`,
+   abstract) — config/deps gate, no network in it. `get_config_schema()` is what
+   `hermes memory setup` reads.
+
 ## The design laws you inherit (non-negotiable)
 
 - **No LLM judge at write time** — routing is source/type-based; an autonomous
