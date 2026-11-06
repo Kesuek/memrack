@@ -1,6 +1,7 @@
 name: memrack
+capabilities: [tools.override]   # mountet memrack_search/write/status/import (keine Overrides von Builtin-Tools!)
 version: 0.4.0
-description: "memrack — one provider slot, many memory backends: rule-based data-type routing into a pluggable backend rack (FTS5, vector, markdown/wiki), fan-out retrieval."
+description: "memrack — one provider slot, many memory backends: agent-routed writes over dockable cards, fan-out retrieval with RRF merge, bridge-style manifest docking."
 author: Kesuek
 license: MIT
 hooks:

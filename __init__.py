@@ -264,10 +264,22 @@ class _MemrackBase:
         self._lock = threading.Lock()
 
     # ── lifecycle ──
+    def _profile_config(self, hermes_home) -> dict:
+        """plugins.memrack.* aus der PROFIL-Config-Datei — der Provider ist zur
+        Register-Zeit config-los geladen (der Manager injiziert nichts); die
+        Datei ist die live-Quelle (die wiki-memory-Convention)."""
+        try:
+            import yaml
+            raw = yaml.safe_load((Path(hermes_home) / "config.yaml").read_text(encoding="utf-8")) or {}
+            return dict((raw.get("plugins") or {}).get(PLUGIN_NAME) or {})
+        except Exception:
+            return {}
+
     def initialize(self, session_id="", **kwargs):
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
+        self._config.update(self._profile_config(self._hermes_home))   # Datei gewinnt die live-Keys
 
         enabled = self._config.get("enabled_backends", _DEFAULT_ENABLED)
         rack = discover_backends(self._hermes_home, enabled_builtins=enabled)
