@@ -481,6 +481,12 @@ class _MemrackBase:
             },
             "memrack_status": {"type": "object", "properties": {},
                                "required": [], "additionalProperties": False},
+            "memrack_import": {
+                "type": "object", "properties": {
+                    "source": {"type": "string",
+                               "enum": ["memory", "user", "both"], "default": "both"},
+                }, "required": [], "additionalProperties": False,
+            },
         }
         for name, params in our.items():
             if name not in seen:
@@ -496,6 +502,8 @@ class _MemrackBase:
             return self._tool_search(args)
         if tool_name == "memrack_write":
             return self._tool_write(args)
+        if tool_name == "memrack_import":
+            return self._tool_import(args)
         if tool_name == self._status_tool_name():
             return json.dumps(self.status(), indent=2, ensure_ascii=False)
         if self._active is not None:
@@ -614,6 +622,54 @@ class _MemrackBase:
                 except Exception as exc:
                     _LOG.warning("memrack touch failed (%s): %s", bname, exc)
 
+
+    # ── T-020: Alt-Import-Job (third-man B-2) — VORBEDINGUNG der Profil-Migration ──
+    def _tool_import(self, args):
+        """Liest builtin-memory-Files (MEMORY.md/USER.md, §-delimited) und importiert
+        jeden Eintrag als fact-Row: hash-dedupe = idempotent (doppelt laufen lassen
+        schadet nicht), target='builtin:<file>'. EIN Job pro Profil, kein Cron."""
+        source = (args.get("source") or "both")
+        if source not in ("memory", "user", "both"):
+            return json.dumps({"error": "source: memory|user|both"}, ensure_ascii=False)
+        mem_dir = Path(self._hermes_home) / "memories"
+        files = (
+            [("MEMORY.md", "builtin:MEMORY.md")] if source in ("memory", "both") else []
+        ) + ([("USER.md", "builtin:USER.md")] if source in ("user", "both") else [])
+        backend = self._routed_for_kind(EXPLICIT)
+        if backend is None:
+            return json.dumps({"error": "kein explicit-floor Backend im Rack"}, ensure_ascii=False)
+        if not callable(getattr(backend, "write", None)):
+            return json.dumps({"error": "Backend %r trägt keinen write" % backend.name},
+                              ensure_ascii=False)
+        report = {"imported": 0, "duplicates": 0, "files": [], "errors": []}
+        for fname, prefix in files:
+            path = mem_dir / fname
+            if not path.exists():
+                report["files"].append({"file": fname, "entries": 0, "imported": 0,
+                                        "duplicates": 0, "note": "not present"})
+                continue
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            entries = [e.strip() for e in raw.split("\n\u00a7\n") if len(e.strip()) >= 10]
+            file_imported = file_dup = 0
+            for entry in entries:
+                try:
+                    out = backend.write(EXPLICIT, entry,
+                                        target_hint="%s" % prefix,
+                                        tags=["import:" + fname])
+                    if out.get("status") == "stored":
+                        report["imported"] += 1
+                        file_imported += 1
+                    else:
+                        report["duplicates"] += 1
+                        file_dup += 1
+                except Exception as exc:
+                    report["errors"].append({"file": fname, "error": str(exc)[:80]})
+            report["files"].append({"file": fname, "entries": len(entries),
+                                    "imported": file_imported, "duplicates": file_dup})
+        self._log_route("import", source, backend.name)
+        report["backend"] = backend.name
+        return json.dumps(report, indent=2, ensure_ascii=False)
+
     # ── write: agent chooses the backend (SPEC §1.1/§1.2) ──
     def _tool_write(self, args):
         content = str(args.get("content") or "").strip()
@@ -694,6 +750,8 @@ _TOOL_DESCRIPTIONS = {
                      "gehört in Wiki-Seiten (Datei-Tools), nicht hierher.",
     "memrack_status": "Rack-Inventar: Backends mit Card (best_for/limits/modes), Heat-Zähler, "
                       "Gaps (ausgefallene Engines), geparkte/dockings-Fehler.",
+    "memrack_import": "Importiert Alt-Bestand des builtin-Memory (MEMORY.md/USER.md, §-delimited) "
+                      "als fact-Rows — idempotent via hash-dedupe. Migrations-Job, einmal pro Profil.",
 }
 
 
