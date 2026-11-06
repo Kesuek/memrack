@@ -9,7 +9,7 @@ content); no LLM judge anywhere — not at write ("Dreaming" lesson,
 
 The Basisfall is design law: with only the built-in `base-db` backend
 (stdlib-only), the whole memory works — fresh HERMES_HOME, zero docking
-(T-013 proves it).
+(design law — the proof lives as the T-013 test on the board; the runtime half lands with T-008).
 """
 
 import importlib.util
@@ -27,44 +27,23 @@ __version__ = "0.3.0"
 
 # Write kinds (plain strings: docked modules load via spec_from_file_location
 # and compare by VALUE, never by identity).
+# Write-KINDS vocabulary (third-man A-3 adopted: semantic is a SEARCH MODE (vec),
+# curation happens via file tools/curation imports — neither is a write kind).
 EXPLICIT = "explicit"   # scalar facts, config values, exact identifiers
-EPISODIC = "episodic"   # raw conversation turns / session activity
-SEMANTIC = "semantic"   # paraphrase-sensitive knowledge snippets
-CURATION = "curation"   # curated structured destinations (wiki pages)
-ALL_TYPES = (EXPLICIT, EPISODIC, SEMANTIC, CURATION)
+CURATED = "curated"     # facts imported from curation (memrack import / kuratur)
+EPISODIC = "episodic"   # routing-only kind: turns live in Hermes state.db, never copied
+WRITE_KINDS = (EXPLICIT, CURATED)   # what memrack_write accepts
 
 DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
 _DEFAULT_ENABLED = ("base-db",)   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
 
-_MEMORY_WRITE_TYPES = (
-    ("add", EXPLICIT), ("patch", EXPLICIT),
-    ("replace", EXPLICIT), ("remove", EXPLICIT),
-)
 
 _SEARCH_MODES = ("fts", "vec", "pointers")
 
 
-def route(write_type: str) -> str:
-    """Fallback mapping: which backend a write kind would go to if the agent
-    does not choose. Deterministic by kind, never by content."""
-    backend = ROUTE_TABLE.get(write_type)
-    if backend is None:
-        _LOG.warning("memrack router: unknown write kind %r -> %s", write_type, DEFAULT_BACKEND)
-        return DEFAULT_BACKEND
-    return backend
-
-
-ROUTE_TABLE = {
-    EXPLICIT: DEFAULT_BACKEND,
-    EPISODIC: DEFAULT_BACKEND,
-    SEMANTIC: DEFAULT_BACKEND,
-    CURATION: DEFAULT_BACKEND,
-}
-
 _MEMORY_WRITE_TYPES = tuple(
     (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
-
-
+#
 # ── backend registry ─────────────────────────────────────────────────────────
 
 _BACKEND_METHODS = (
@@ -300,8 +279,8 @@ class _MemrackBase:
         if self._force:
             return self._active
         if kind == EPISODIC:
-            return self._rack.get("wiki")
-        return self._rack.get(self._pick_default_target_for_writes())
+            return self._rack.get("wiki")   # session-writer, oder None (state.db ist kanonisch)
+        return self._rack.get(self._pick_default_target_for_writes())   # explicit/curated
 
     def _pick_default_target_for_writes(self):
         forced = self._config.get("backend")
@@ -404,7 +383,10 @@ class _MemrackBase:
                 ",".join(c["modes"]) or "none",
                 "" if c["write"] else " | kein atomarer Write",
                 " (built-in)" if c["built_in"] else ""))
-        return "\n".join(lines[:7])
+        if len(lines) > 9:
+            overflow = len(self._cards) - 8
+            lines = lines[:9] + ["- … +%d weitere Backends — memrack_status" % overflow]
+        return "\n".join(lines)
 
     def shutdown(self):
         for backend in list(self._rack.values()):
@@ -455,7 +437,7 @@ class _MemrackBase:
                 "type": "object", "properties": {
                     "content": {"type": "string"},
                     "backend": {"type": "string", "default": None},
-                    "kind": {"type": "string", "enum": [EXPLICIT], "default": EXPLICIT},
+                    "kind": {"type": "string", "enum": list(WRITE_KINDS), "default": EXPLICIT},
                     "tags": {"type": "array", "items": {"type": "string"}},
                 }, "required": ["content"],
                 "additionalProperties": False,
@@ -564,12 +546,14 @@ class _MemrackBase:
                 entry = pool.setdefault(key, {
                     "backend": hit.get("backend"), "kind": hit.get("kind"),
                     "content": hit.get("content"), "target": hit.get("target"),
-                    "ts": hit.get("ts"), "score": 0.0, "found_by": []})
+                    "ts": hit.get("ts"), "hits": hit.get("hits") or 0,
+                    "score": 0.0, "found_by": []})
                 entry["score"] += 1.0 / (60.0 + max(1, int(hit.get("rank") or 99)))
                 entry["found_by"].append(hit.get("mode"))
-        merged = sorted(pool.values(),
-                        key=lambda e: (-e["score"], str(e.get("ts") or ""),),
-                        )[:limit]
+        merged = list(pool.values())
+        merged.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)   # Phase 1: ts DESC
+        merged.sort(key=lambda e: (-e["score"], -(e.get("hits") or 0)))    # Phase 2 (stable): score, heat DESC
+        merged = merged[:limit]
         for e in merged:
             e["found_by"] = sorted({m for m in e["found_by"] if m})
         return merged
@@ -600,7 +584,12 @@ class _MemrackBase:
         backend_wish = args.get("backend") or None
         tags = args.get("tags") if isinstance(args.get("tags"), list) else None
         if not content:
-            return json.dumps({"error": "content required"});
+            return json.dumps({"error": "content required"})
+        if kind not in WRITE_KINDS:
+            return json.dumps({"error": "kind %r ist kein Write-kind" % kind,
+                               "hint": "kinds: explicit|curated — episodic ist Hermes-nativ,"
+                                       " semantic ist ein SUCHMODE (vec), kein Speicherziel."},
+                              ensure_ascii=False)
         if backend_wish and backend_wish not in self._rack:
             return json.dumps({"error": "unknown backend %r" % backend_wish,
                                "hint": "Registriert: %s" % ", ".join(sorted(self._rack))},

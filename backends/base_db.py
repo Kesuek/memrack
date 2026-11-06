@@ -229,11 +229,12 @@ class BaseDbBackend:
         hits = []
         for i, (rid, dist) in enumerate(rows, 1):
             row = self._db.execute(
-                "SELECT content, target, ts FROM facts WHERE id=?", (rid,)).fetchone()
+                "SELECT content, target, ts, hits FROM facts WHERE id=?", (rid,)).fetchone()
             if row:
                 hits.append({"backend": self.name, "kind": "fact", "rank": i,
                              "content": row[0],
                              "target": row[1] or "base-db:%d" % rid, "ts": row[2],
+                             "hits": row[3],
                              "distance": round(float(dist), 4)})
         return hits
 
@@ -243,11 +244,12 @@ class BaseDbBackend:
         if mode == "fts":
             rows, src = self._fts_query(query, k, "facts_fts",
                                         "SELECT facts.id, facts.content AS content,"
-                                        " facts.target AS target, facts.ts AS ts FROM facts_fts"
+                                        " facts.target AS target, facts.ts AS ts, facts.hits AS hits FROM facts_fts"
                                         " JOIN facts ON facts.id = facts_fts.rowid"
                                         " WHERE facts_fts MATCH ?", ("content",))
             hits = [{"backend": self.name, "kind": "fact", "rank": i + 1,
-                     "content": r[1], "target": r[2] or "base-db:%d" % r[0], "ts": r[3]}
+                     "content": r[1], "target": r[2] or "base-db:%d" % r[0], "ts": r[3],
+                     "hits": r[4]}
                     for i, r in enumerate(rows)]
         elif mode == "pointers":
             rows, _ = self._fts_query(query, k, "pointers_fts",
