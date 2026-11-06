@@ -36,10 +36,13 @@ EPISODIC = "episodic"   # routing-only kind: turns live in Hermes state.db, neve
 WRITE_KINDS = (EXPLICIT, CURATED)   # what memrack_write accepts
 
 DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
-_DEFAULT_ENABLED = ("base-db",)   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
+# state-episodic default-ON (read-only über die state.db — T-009-Ronny-Wunsch:
+# memory-Abfragen durchsuchen die Session-Historie automatisch; das state.db
+# bleibt kanonisch/ro — kein Copy, kein Trigger)
+_DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
 
 
-_SEARCH_MODES = ("fts", "vec", "pointers")
+_SEARCH_MODES = ("fts", "vec", "pointers", "episodic")
 
 
 _MEMORY_WRITE_TYPES = tuple(
@@ -230,7 +233,7 @@ class _MemrackBase:
                 "key": "enabled_backends",
                 "description": "Which built-ins are in the rack (default: base-db only; wiki = opt-in migration bridge)",
                 "default": list(_DEFAULT_ENABLED),
-                "choices": [list(_DEFAULT_ENABLED), ["base-db", "wiki"]],
+                "choices": [list(_DEFAULT_ENABLED), ["base-db", "state-episodic"], ["base-db", "wiki"], ["base-db", "wiki", "state-episodic"]],
             },
             {
                 "key": "embedding_model",
