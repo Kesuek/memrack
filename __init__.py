@@ -45,6 +45,19 @@ _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_bac
 _SEARCH_MODES = ("fts", "vec", "pointers", "episodic")
 
 
+def _norm_backends(value):
+    """T-014: wizard-safe read of enabled_backends — the setup wizard writes ONE
+    string (comma list), a hand-edited config.yaml writes a yaml list; both must
+    rack identically. Unknown names are NOT filtered here: the registry parks
+    them (honest inventory), this only repairs the TYPE."""
+    if isinstance(value, str):
+        items = [t.strip() for t in value.split(",") if t.strip()]
+        return items or list(_DEFAULT_ENABLED)
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return list(_DEFAULT_ENABLED)
+
+
 _MEMORY_WRITE_TYPES = tuple(
     (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
 
@@ -231,9 +244,11 @@ class _MemrackBase:
             },
             {
                 "key": "enabled_backends",
-                "description": "Which built-ins are in the rack (default: base-db only; wiki = opt-in migration bridge)",
-                "default": list(_DEFAULT_ENABLED),
-                "choices": [list(_DEFAULT_ENABLED), ["base-db", "state-episodic"], ["base-db", "wiki"], ["base-db", "wiki", "state-episodic"]],
+                "description": "Rack membership (comma list): base-db always; wiki/state-episodic opt-in",
+                "default": ",".join(_DEFAULT_ENABLED),
+                "choices": [",".join(c) for c in (
+                    ("base-db",), ("base-db", "state-episodic"),
+                    ("base-db", "wiki"), ("base-db", "state-episodic", "wiki"))],
             },
             {
                 "key": "embedding_model",
@@ -278,13 +293,33 @@ class _MemrackBase:
         except Exception:
             return {}
 
+    def save_config(self, values, hermes_home=None):
+        """T-014: setup-consumer contract — the wizard hands values back; write the
+        SAME block _profile_config reads (``plugins.memrack`` in config.yaml,
+        wiki-memory convention). Failure = warning, never a setup crash."""
+        config_path = _hermes_home(hermes_home) / "config.yaml"
+        try:
+            import yaml
+            existing = {}
+            if config_path.exists():
+                existing = yaml.safe_load(
+                    config_path.read_text(encoding="utf-8-sig")) or {}
+            existing.setdefault("plugins", {})
+            existing["plugins"][PLUGIN_NAME] = dict(values or {})
+            config_path.write_text(
+                yaml.dump(existing, default_flow_style=False, allow_unicode=True),
+                encoding="utf-8")
+        except Exception as exc:
+            _LOG.warning("memrack save_config failed (%s): %s",
+                         config_path, exc)
+
     def initialize(self, session_id="", **kwargs):
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
         self._config.update(self._profile_config(self._hermes_home))   # Datei gewinnt die live-Keys
 
-        enabled = self._config.get("enabled_backends", _DEFAULT_ENABLED)
+        enabled = _norm_backends(self._config.get("enabled_backends"))
         rack = discover_backends(self._hermes_home, enabled_builtins=enabled)
         self._rack = rack["backends"]
         self._parked = rack["parked"]
