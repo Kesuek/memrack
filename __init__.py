@@ -511,16 +511,16 @@ class _MemrackBase:
         """The rack card (SPEC §1.1): one line per backend, tiny, informs the agent's choices."""
         if not self._rack:
             return ""
-        lines = ["memrack rack (v%s): wähle Ziele bewusst bei memrack_write;" % __version__]
+        lines = ["memrack rack (v%s): pick write destinations deliberately in memrack_write;" % __version__]
         for bname in sorted(self._cards):
             c = self._cards[bname]
             extra = ""
             if c.get("declared"):
-                extra = " | deklariert-ohne-Auslieferung: %s" % ",".join(c["declared"])
+                extra = " | declared-without-shipping: %s" % ",".join(c["declared"])
             lines.append("- %s: %s | search: %s%s%s%s" % (
                 bname, c["best_for"] or "",
                 ",".join(c["modes"]) or "none",
-                "" if c["write"] else " | kein atomarer Write",
+                "" if c["write"] else " | no atomic write",
                 " (built-in)" if c["built_in"] else "",
                 extra))
         if len(lines) > 9:
@@ -624,7 +624,7 @@ class _MemrackBase:
         limit = max(1, min(int(args.get("limit") or self._config.get("search_top_k") or 8), 32))
         if not query:
             return json.dumps({"error": "query required",
-                               "hint": "Was suchst du? Ein Stichwort reicht, z.B. 'Relay Port'"},
+                               "hint": "What are you looking for? One keyword is enough, e.g. 'Relay Port'"},
                               ensure_ascii=False)
 
         chosen = list(self._rack.values())
@@ -632,7 +632,7 @@ class _MemrackBase:
             if backend_wish not in self._rack:
                 return json.dumps({
                     "error": "unknown backend %r" % backend_wish,
-                    "hint": "Registriert: %s" % ", ".join(sorted(self._rack)),
+                    "hint": "registered: %s" % ", ".join(sorted(self._rack)),
                 }, ensure_ascii=False)
             chosen = [self._rack[backend_wish]]
 
@@ -647,17 +647,17 @@ class _MemrackBase:
             # SPEC §1.4 Degradation: ein spezifisch angefragt modus, den KEIN im Rack liegender
             # Backend trägt, ist ein ehrlicher Error — niemals stilles 0-Ergebnis.
             return json.dumps({
-                "error": "kein backend trägt mode %r" % mode,
-                "hint": "verfügbare Modi: %s" % (", ".join(carried) or "keine"),
+                "error": "no backend carries mode %r" % mode,
+                "hint": "available modes: %s" % (", ".join(carried) or "none"),
             }, ensure_ascii=False)
         for backend in chosen:
             modes = [m for m in requested if m in tuple(self._cards[backend.name]["modes"])]
             if not modes:
                 if backend_wish:
                     return json.dumps({
-                        "error": "backend %r trägt mode %r nicht" % (backend.name, mode),
-                        "hint": "verfügbare Modi: %s" % ", ".join(
-                            self._cards[backend.name]["modes"] or ["keine"]),
+                        "error": "backend %r does not carry mode %r" % (backend.name, mode),
+                        "hint": "available modes: %s" % ", ".join(
+                            self._cards[backend.name]["modes"] or ["none"]),
                     }, ensure_ascii=False)
                 continue
             for m in modes:
@@ -676,11 +676,11 @@ class _MemrackBase:
         result = {"query": query, "mode": mode, "backend": backend_wish,
                   "ms": ms, "results": merged, "engine_errors": engine_errors}
         if not merged and not engine_errors:
-            hint = "0 Treffer."
+            hint = "0 results."
             if backend_wish:
-                hint += " Nur %r durchsucht — probier backend=None für den ganzen Rack." % backend_wish
-            hint += " Versuch mode 'vec' (Paraphrasen) oder 'pointers' (Verzeichnis);"
-            hint += " breiter formulieren hilft auch."
+                hint += " Only %r was searched — try backend=None for the whole rack." % backend_wish
+            hint += " Try mode 'vec' (paraphrases) or 'pointers' (directory);"
+            hint += " broader phrasing helps too."
             result["hint"] = hint
         return json.dumps(result, indent=2, ensure_ascii=False)
 
@@ -740,9 +740,9 @@ class _MemrackBase:
         ) + ([("USER.md", "builtin:USER.md")] if source in ("user", "both") else [])
         backend = self._routed_for_kind(EXPLICIT)
         if backend is None:
-            return json.dumps({"error": "kein explicit-floor Backend im Rack"}, ensure_ascii=False)
+            return json.dumps({"error": "no explicit-floor backend in the rack"}, ensure_ascii=False)
         if not callable(getattr(backend, "write", None)):
-            return json.dumps({"error": "Backend %r trägt keinen write" % backend.name},
+            return json.dumps({"error": "backend %r does not carry write" % backend.name},
                               ensure_ascii=False)
         report = {"imported": 0, "duplicates": 0, "files": [], "errors": []}
         for fname, prefix in files:
@@ -786,25 +786,25 @@ class _MemrackBase:
         if not content:
             return json.dumps({"error": "content required"})
         if kind not in WRITE_KINDS:
-            return json.dumps({"error": "kind %r ist kein Write-kind" % kind,
-                               "hint": "kinds: explicit|curated — episodic ist Hermes-nativ,"
-                                       " semantic ist ein SUCHMODE (vec), kein Speicherziel."},
+            return json.dumps({"error": "kind %r is not a write kind" % kind,
+                               "hint": "kinds: explicit|curated — episodic is Hermes-native, "
+                                       "semantic is a SEARCH MODE (vec), not a storage destination."},
                               ensure_ascii=False)
         if backend_wish and backend_wish not in self._rack:
             return json.dumps({"error": "unknown backend %r" % backend_wish,
-                               "hint": "Registriert: %s" % ", ".join(sorted(self._rack))},
+                               "hint": "registered: %s" % ", ".join(sorted(self._rack))},
                               ensure_ascii=False)
         backend = self._rack.get(backend_wish) if backend_wish else \
             self._routed_for_kind(kind)   # keine Wahl = deterministische Quelle-Regel
         if backend is None:
-            return json.dumps({"error": "kein Backend für kind %r im Rack" % kind,
-                               "hint": "memrack_status zeigt die Karten"})
+            return json.dumps({"error": "no backend for kind %r in the rack" % kind,
+                               "hint": "memrack_status shows the cards"})
         write_fn = getattr(backend, "write", None)
         if not callable(write_fn):
             return json.dumps({
-                "error": "backend %r trägt keinen atomaren Write" % backend.name,
-                "hint": "Strukturwissen gehört als Wiki-Seite (Datei-Tools); "
-                        "atomare Fakten: memrack_write ohne backend-Param.",
+                "error": "backend %r does not carry an atomic write" % backend.name,
+                "hint": "structural knowledge belongs as a wiki page (file tools); "
+                        "atomic facts: memrack_write without the backend param.",
             }, ensure_ascii=False)
         try:
             result = write_fn(kind, content, tags=tags, session_id=self._session_id)
@@ -849,16 +849,16 @@ class _MemrackBase:
 
 
 _TOOL_DESCRIPTIONS = {
-    "memrack_search": "Suche im memory-rack: hybrid fan-out über alle Backends und Suchmodi "
-                      "(default mode=all), oder gezielt ein Backend/Modus. Liefert Treffer mit "
-                      "target-Referenzen (wiki-Pfad/L42 etc.) zum ganzseitigen Weiterlesen.",
-    "memrack_write": "Speichert ein atomares Fact (ein Satz) im memory-rack; der Agent wählt "
-                     "die Ziel-Backend anhand der Rack-Karte (default: base-db). Strukturwissen "
-                     "gehört in Wiki-Seiten (Datei-Tools), nicht hierher.",
-    "memrack_status": "Rack-Inventar: Backends mit Card (best_for/limits/modes), Heat-Zähler, "
-                      "Gaps (ausgefallene Engines), geparkte/dockings-Fehler.",
-    "memrack_import": "Importiert Alt-Bestand des builtin-Memory (MEMORY.md/USER.md, §-delimited) "
-                      "als fact-Rows — idempotent via hash-dedupe. Migrations-Job, einmal pro Profil.",
+    "memrack_search": "Search the memory-rack: hybrid fan-out across all backends and search "
+                      "modes (default mode=all), or target one backend/mode. Returns hits with "
+                      "target references (wiki path/L42 etc.) for whole-page follow-up reading.",
+    "memrack_write": "Store one atomic fact (one sentence) in the memory-rack; the agent chooses "
+                     "the destination backend via the rack card (default: base-db). Structural "
+                     "knowledge belongs in wiki pages (file tools), not here.",
+    "memrack_status": "Rack inventory: backends with card (best_for/limits/modes), heat counters, "
+                      "gaps (engines that degraded), parked/docking errors.",
+    "memrack_import": "Import the builtin memory's legacy entries (MEMORY.md/USER.md, §-delimited) "
+                      "as fact rows — idempotent via hash-dedupe. Migration job, once per profile.",
 }
 
 

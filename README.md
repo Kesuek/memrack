@@ -26,11 +26,11 @@ have.
   `backends.d/<name>.yaml` manifest (`name`, `module`, `best_for`, `limits`,
   `search`) plus its module; `rm` the manifest = unregistered, a
   `disabled-` prefix = parked. Legacy code-first `.py` drop-ins still work;
-  pip entry points come later (v0.4+)
+  pip entry points come later (v0.5+)
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.4.0 (60 tests green; includes the backend SDK)
+## Status — v0.4.x (86 tests green; SDK, state-episodic, provider CLI, desktop config surface)
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
 - [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
@@ -49,8 +49,13 @@ have.
       pre-built, OPTIONAL — duck-typing remains the law), `memrack.conformance`
       (`check_backend`/`assert_conformance` + standalone runner), `backends/_template.py`
       + `BACKEND_GUIDE.md` — target: foreign backend 0→docked in <15 min
-- [ ] heat report CLI (`hermes memrack report` — provider CLI, surfaces only when active)
-- [ ] catalog submission
+- [x] state-episodic backend (T-023): READ-ONLY search over the canonical session
+      history (`state.db`, mode=ro, no copies, no triggers), default ON
+- [x] provider CLI (T-012): `hermes memrack status|report|export|import` — the heat
+      report (hot facts, never-read count) is the curation basis; surfaces only when active
+- [x] config surfaces (T-014/T-024): CLI-wizard schema (str-convention) + desktop panel
+      (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
+- [ ] catalog submission (draft PR pending)
 
 ## Install (experimental, not yet published)
 

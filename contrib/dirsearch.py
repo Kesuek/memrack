@@ -38,10 +38,10 @@ except ImportError:
 
 class DirsearchBackend(MemrackBackend if MemrackBackend is not object else object):
     name = "dirsearch"                      # UNIQUE im Rack
-    best_for = ("Wiederauffinden einzelner Zeilen in Markdown-/Textdatei-Bestaenden "
-                "(Konfig-Verzeichnisse, Notizsets) ueber Full-Text-Termsuche.")
-    limits = ("read-only (kein write, kein Heat-Counter); kein Vec, kein Index — "
-              "Scan pro Query; braucht provider_config['root'], sonst unbrauchbar.")
+    best_for = ("re-finding single lines across markdown/text file collections "
+                "(config dirs, note sets) via full-text term search.")
+    limits = ("read-only (no write, no heat counter); no vec, no index — "
+              "scan per query; needs provider_config['root'], else useless.")
     search_modes = ("fts",)                 # gefuehrt nur, wenn Root konfiguriert (siehe card_modes)
     writeable = False
 
@@ -96,7 +96,7 @@ class DirsearchBackend(MemrackBackend if MemrackBackend is not object else objec
 
     def search(self, query, mode, k, session_id=""):
         if not self.is_available():
-            raise ValueError("dirsearch: kein Root konfiguriert (provider_config['root'])")
+            raise ValueError("dirsearch: no root configured (provider_config['root'])")
         if mode != "fts":
             raise ValueError("dirsearch carries fts only")
         with self._lock:

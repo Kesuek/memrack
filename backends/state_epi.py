@@ -33,8 +33,8 @@ def _iso_from_epoch(epoch) -> str:
 
 class StateEpisodicBackend:
     name = "state-episodic"
-    best_for = "verflossene Session-Talks und Tool-Ergebnisse (state.db, READ-ONLY): wer/wann/wie war das"
-    limits = "read-only \u2014 kein Write/Heat; FTS \u00fcber messages_fts + Sessions-Title; das state.db ist und bleibt kanonisch"
+    best_for = "past session chats and tool results (state.db, READ-ONLY): who/when/what happened"
+    limits = "read-only \u2014 no write/heat; FTS over messages_fts + session titles; the state.db is and stays canonical"
     search_modes = ("episodic",)
     writeable = False
 
@@ -48,13 +48,13 @@ class StateEpisodicBackend:
         home = Path(hermes_home or (Path.home() / ".hermes"))
         self._path = home / "state.db"
         if not self._path.exists():
-            raise RuntimeError("state.db nicht vorhanden \u2014 Basisfall ohne Sessions ist kein Fehler hier;"
-                               " das Backend darf dann nicht laden (gap-note: no state.db)")
+            raise RuntimeError("state.db not present \u2014 the Basisfall without sessions is no error here;"
+                               " the backend must refuse to load (gap-note: no state.db)")
         try:
             self._db = sqlite3.connect(f"file:{self._path}?mode=ro", uri=True,
                                        check_same_thread=False, timeout=5.0)
         except sqlite3.Error as e:
-            raise RuntimeError(f"state.db read-only attach schlug fehl: {e}") from e
+            raise RuntimeError(f"state.db read-only attach failed: {e}") from e
         # Schema-Verifikation: ohne die FTS-Tabelle \u00e4lterer Hermes = ehrlich kein episodic-Wert
         try:
             self._db.execute("SELECT rowid FROM messages_fts LIMIT 1").fetchone()

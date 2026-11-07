@@ -7,8 +7,8 @@ without touching this contract.
 
 Card (code-first built-in; docked backends carry theirs in the manifest):
     name:    base-db
-    best_for: atomare Fakten + Mirror von memory-writes; exakte Nachfrage, Millisekunden
-    limits:  EIN Satz pro Row, keine Prosa; kein vec
+    best_for: atomic facts + mirror of memory-writes; exact recall, milliseconds
+limits:  ONE sentence per row, no prose; no vec
     search:  fts, pointers
 """
 
@@ -66,8 +66,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[768]);
 
 class BaseDbBackend:
     name = PLUGIN_NAME
-    best_for = "atomare Fakten + Mirror von memory-writes; exakte Nachfrage in Millisekunden"
-    limits = "EIN Satz pro Row beim Write; Import erlaubt mehrsätzliche Alt-Rows (tags import:); vec nur wenn sqlite-vec+ollama ver\u00fcgbar"
+    best_for = "atomic facts + mirror of memory-writes; exact recall in milliseconds"
+    limits = "ONE sentence per row on write; import allows multi-sentence legacy rows (tags import:); vec only when sqlite-vec+ollama are available"
     search_modes = ("fts", "pointers")   # STATIC floor; card_modes() reports the DYNAMIC set
     writeable = True
     write_types = ("explicit", "episodic", "semantic", "curation")  # accepts everything routed at it

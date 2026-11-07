@@ -42,8 +42,8 @@ except ImportError:
 
 class TemplateBackend(MemrackBackend if MemrackBackend is not object else object):
     name = "template"                       # UNIQUE in the rack
-    best_for = "example: atomare Fakten aus einem fremden Tool"
-    limits = "example: read-only mirror; kein vec"
+    best_for = "example: atomic facts from a foreign tool"
+    limits = "example: read-only mirror; no vec"
     search_modes = ("fts",)                 # claim what search() really implements
     writeable = True
 

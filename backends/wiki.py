@@ -116,8 +116,8 @@ class WikiIndex:
 
 class WikiBackend:
     name = "wiki"
-    best_for = "Strukturwissen/Ganzseiten (Regeln, Zusammenh\u00e4nge), Kuratier-Ziel via Notizwand"
-    limits = "kein atomarer Write (Seiten schreibt der Agent mit Datei-Tools)"
+    best_for = "structural knowledge / whole pages (rules, relationships); curation via the wiki notepad"
+    limits = "no atomic write (pages are written by the agent with file tools)"
     search_modes = ("fts",)   # static; the index is runtime-built
     writeable = False
     write_types = ("explicit", "episodic", "semantic", "curation")

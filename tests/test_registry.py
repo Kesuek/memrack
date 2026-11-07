@@ -147,10 +147,10 @@ def test_search_targeted_backend_and_mode_errors(tmp_path):
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     # Unknown-Backend → Error mit Inventar
     out = prov.handle_tool_call("memrack_search", {"query": "x", "backend": "nosuch"})
-    assert '"error"' in out and "Registriert" in out
+    assert '"error"' in out and "registered:" in out
     # base-db trägt KEIN vec → explizite Fehlermeldung mit verfügbaren Modi (SPEC §1.4)
     out = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
-    assert '"error"' in out and "kein backend trägt mode 'vec'" in out
+    assert '"error"' in out and "no backend carries mode 'vec'" in out
     assert "fts, pointers" in out   # verfügbare Modi namentlich
     # gezieltes fts funktioniert
     prov.handle_tool_call("memrack_write", {"content": "Ein Fakt"})
@@ -170,7 +170,7 @@ def test_write_to_wiki_is_guided_error_when_parked(tmp_path):
     prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     out = prov.handle_tool_call("memrack_write", {"content": "x", "backend": "wiki"})
-    assert '"error"' in out and "Registriert" in out
+    assert '"error"' in out and "registered:" in out
 
 
 def test_provider_tool_surface_is_additive(tmp_path):

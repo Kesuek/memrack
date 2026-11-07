@@ -32,10 +32,10 @@ def _print(data):
 
 
 _SUBCOMMAND_HELP = (
-    ("status", "Rack-Inventar: Backends mit Card, aktiv/gaps/geparkt/pending-docks"),
-    ("report", "Heat-Report: hot top-10 + nie gelesene Fakten + Pointer-Zähler"),
-    ("export", "Voller JSON-Dump der base-db-Store (facts + pointers)"),
-    ("import", "Alt-Import-Job (builtin-Memory → fact-Rows, idempotent)"))
+    ("status", "rack inventory: backends with card, active/gaps/parked/pending-docks"),
+    ("report", "heat report: hot top-10 + never-read facts + pointer counts"),
+    ("export", "full JSON dump of the base-db store (facts + pointers)"),
+    ("import", "legacy import job (builtin memory → fact rows, idempotent)"))
 
 
 def register_cli(parser: argparse.ArgumentParser) -> None:
@@ -59,8 +59,8 @@ def _run(args) -> int:
     try:
         p = _provider(home)
     except Exception as e:  # fail with an actionable message, not a traceback wall
-        _print({"error": f"memrack nicht ladebar: {type(e).__name__}: {e}",
-                "hint": "'hermes memory status' für Install-/Verfügbarkeits-Stand"})
+        _print({"error": f"memrack not loadable: {type(e).__name__}: {e}",
+                "hint": "'hermes memory status' for install/availability state"})
         return 1
 
     try:
@@ -73,7 +73,7 @@ def _run(args) -> int:
             eng = getattr(p, "_rack", {}).get("base-db")
             db = getattr(eng, "_db", None) if eng else None
             if db is None:
-                _print({"error": "kein base-db-Store im Rack (enabled_backends checken)"})
+                _print({"error": "no base-db store in the rack (check enabled_backends)"})
                 return 1
             if args.sub == "report":
                 hot = db.execute(
