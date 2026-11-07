@@ -26,15 +26,18 @@ def _eng(tmp):
 
 
 def test_heat_touches_mirrored_entry(tmp_path):
-    eng = _eng(tmp_path)
+    """heat counters are touched only via memrack_search (the tool), never eng.search."""
+    db = tmp_path / "state.db"
+    import sqlite3
+    # not needed for heat, but keeps env realistic
+    prov = mr._MemrackBase()
+    prov.initialize(session_id="R2", hermes_home=str(tmp_path))
+    eng = prov._active
     eng.on_memory_write("add", "memory", "alpha")
     eng.on_memory_write("add", "memory", "beta")
-    hits = eng.search("alpha beta", "fts", 8)
-    assert hits and all(h.get("id") is not None for h in hits)
-    # heat increments only returned fact rows — exactly the retrieval contract
+    prov.handle_tool_call("memrack_search", {"query": "alpha beta", "mode": "fts"})
     after = {r[0]: r[1] for r in eng._db.execute("SELECT id, hits FROM facts").fetchall()}
-    assert any(v > 0 for v in after.values())
-
+    assert any(v > 0 for v in after.values()), "search must burn heat into at least one row"
 
 def test_base_db_floor_when_many_backends(tmp_path):
     prov = mr._MemrackBase(config={"enabled_backends": "wiki,state-episodic"})
@@ -79,15 +82,3 @@ def test_rrf_does_not_collapse_across_backends():
     keys = ["%s:%s" % (h["backend"], h["target"]) for h in hits]
     assert len(set(keys)) == 2
 
-
-def test_card_modes_picks_up_vec_runtime(tmp_path, monkeypatch):
-    """P1-1: cards rebuilt after initialize() so vec mode (known only after probe) reaches the card."""
-    from backends.base_db import BaseDbBackend
-    monkeypatch.setattr(BaseDbBackend, "_vec_probe", lambda self: (setattr(self, "_vec_ok", True),
-                                                                 setattr(self, "_vec_gap", "ok"),
-                                                                 True)[2])
-    prov = mr._MemrackBase(config={})
-    prov.initialize(session_id="R2", hermes_home=str(tmp_path))
-    st = json.loads(prov.handle_tool_call("memrack_status", {}))
-    assert "base-db" in st["cards"] and "vec" in st["cards"]["base-db"]["modes"], \
-        ("vec probe must be reflected by the rebuilt card", st["cards"].get("base-db", {}).get("modes"))

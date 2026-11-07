@@ -255,7 +255,7 @@ class BaseDbBackend:
                                         " facts.target AS target, facts.ts AS ts, facts.hits AS hits FROM facts_fts"
                                         " JOIN facts ON facts.id = facts_fts.rowid"
                                         " WHERE facts_fts MATCH ?", ("content",))
-            hits = [{"backend": self.name, "kind": "fact", "rank": i + 1,
+            hits = [{"backend": self.name, "kind": "fact", "id": r[0], "rank": i + 1,
                      "content": r[1], "target": r[2] or "base-db:%d" % r[0], "ts": r[3],
                      "hits": r[4]}
                     for i, r in enumerate(rows)]

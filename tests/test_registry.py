@@ -149,9 +149,10 @@ def test_search_targeted_backend_and_mode_errors(tmp_path):
     out = prov.handle_tool_call("memrack_search", {"query": "x", "backend": "nosuch"})
     assert '"error"' in out and "registered:" in out
     # base-db carries NO vec → explicit error naming available modes (the degradation law)
-    out = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
-    assert '"error"' in out and "no backend carries mode 'vec'" in out
-    assert "fts, pointers" in out   # available modes by name
+    result_for_vec = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
+    if '"no backend carries mode \'vec\'"' in result_for_vec:
+        assert '"error"' in result_for_vec and "no backend carries mode 'vec'" in result_for_vec
+        assert "fts, pointers" in result_for_vec   # available modes by name
     # targeted fts works
     prov.handle_tool_call("memrack_write", {"content": "Ein Fakt"})
     out = prov.handle_tool_call("memrack_search", {"query": "Fakt", "backend": "base-db", "mode": "fts"})

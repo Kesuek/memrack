@@ -372,6 +372,10 @@ class _MemrackBase:
         self._config.update(self._profile_config(self._hermes_home))   # the file wins the live keys
 
         enabled = _norm_backends(self._config.get("enabled_backends"))
+        if not enabled:
+            enabled = list(_DEFAULT_ENABLED)
+        if len(enabled) >= 2 and DEFAULT_BACKEND not in enabled:
+            enabled = [DEFAULT_BACKEND] + enabled
         if _truthy(self._config.get("auto_enable")):   # activation auto-provision —
             for b in ("base-db", "wiki"):              # merge only, never a disable
                 if b not in enabled:
@@ -400,6 +404,9 @@ class _MemrackBase:
                         "memrack: default backend %r failed to initialize: %s"
                         % (target, exc)) from exc
         self._rack = initialized
+
+        # cards rebuilt post-init (vec probe happens inside init)
+        self._cards = {n: _card(b) for n, b in self._rack.items()}
 
         log_dir = Path(self._hermes_home) / "plugin-data" / PLUGIN_NAME
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -714,9 +721,9 @@ class _MemrackBase:
         pool: dict = {}
         for hits in runs:
             for hit in hits:
-                key = hit.get("target") or "content:%s" % (hit.get("content") or "")
+                key = "%s:%s" % (hit.get("backend"), hit.get("target")) or "content:%s" % (hit.get("content") or "")
                 entry = pool.setdefault(key, {
-                    "backend": hit.get("backend"), "kind": hit.get("kind"),
+                    "backend": hit.get("backend"), "kind": hit.get("kind"), "id": hit.get("id"),
                     "content": hit.get("content"), "target": hit.get("target"),
                     "ts": hit.get("ts"), "hits": hit.get("hits") or 0,
                     "score": 0.0, "found_by": []})
@@ -736,7 +743,9 @@ class _MemrackBase:
         for hit in merged:
             if hit.get("kind") != "fact":
                 continue
-            tid = str(hit.get("target") or "").rsplit(":", 1)[-1]
+            tid = hit.get("id")
+            if tid is None:
+                continue
             try:
                 by_backend.setdefault(hit.get("backend"), []).append(int(tid))
             except ValueError:
