@@ -45,6 +45,14 @@ _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_bac
 _SEARCH_MODES = ("fts", "vec", "pointers", "episodic")
 
 
+def _truthy(value):
+    """T-025 read-side truth for toggles: wizard writes "true"/"false" strings,
+    the desktop writes native bools — both must mean the same."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("true", "yes", "on", "1")
+
+
 def _norm_backends(value):
     """T-014: wizard-safe read of enabled_backends — the setup wizard writes ONE
     string (comma list), a hand-edited config.yaml writes a yaml list; both must
@@ -261,6 +269,14 @@ class _MemrackBase:
                 "default": "http://127.0.0.1:11434",
             },
             {
+                "key": "auto_enable",
+                "description": "On activation, enable base-db + wiki automatically (merges "
+                               "into enabled_backends; default off — nothing enabled "
+                               "without an explicit toggle)",
+                "default": "false",
+                "choices": ["true", "false"],
+            },
+            {
                 "key": "search_top_k",
                 "description": "Default result count for memrack_search (max 32)",
                 "default": 8,
@@ -357,6 +373,10 @@ class _MemrackBase:
         self._config.update(self._profile_config(self._hermes_home))   # Datei gewinnt die live-Keys
 
         enabled = _norm_backends(self._config.get("enabled_backends"))
+        if _truthy(self._config.get("auto_enable")):   # T-025: activation auto-provision —
+            for b in ("base-db", "wiki"):              # merge only, never a disable
+                if b not in enabled:
+                    enabled.append(b)
         rack = discover_backends(self._hermes_home, enabled_builtins=enabled)
         self._rack = rack["backends"]
         self._parked = rack["parked"]

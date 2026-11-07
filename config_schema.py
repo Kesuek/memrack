@@ -9,6 +9,7 @@ flat_json keys win (the newest user intent). The CLI wizard surface
 """
 
 from plugins.memory.config_schema import (
+    KIND_BOOL,
     KIND_NUMBER,
     KIND_SELECT,
     KIND_TEXT,
@@ -60,6 +61,12 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             default="base-db,state-episodic",
             description="Which built-ins are in the rack (on/off per backend)",
             options=_rack_options(),
+            inline=True,
+        ),
+        ProviderField(
+            key="auto_enable", label="Auto-enable at activation", kind=KIND_BOOL,
+            default="false",
+            description="Enable base-db + wiki automatically on activation (default off)",
             inline=True,
         ),
         ProviderField(
