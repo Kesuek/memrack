@@ -62,7 +62,6 @@ plus per-backend schema references.
       report (hot facts, never-read count) is the curation basis; surfaces only when active
 - [x] config surfaces (T-014/T-024): CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
-- [ ] catalog submission (draft PR pending)
 
 ## Install (experimental, not yet published)
 
