@@ -129,4 +129,4 @@ def test_rrf_tiebreak_heat_then_freshness(tmp_path):
 
 def test_docstring_no_unproven_claim():
     src = pathlib.Path(_ROOT / "__init__.py").read_text(encoding="utf-8")
-    assert "(T-013 proves it)" not in src   # the promise lives as a TEST, not as a claim
+    assert "proves it" not in src   # no docstring claim may promise what a test must prove   # the promise lives as a TEST, not as a claim

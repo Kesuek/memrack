@@ -1,4 +1,4 @@
-"""memrack SDK package — sugar for backend authors (T-015).
+"""memrack SDK package — sugar for backend authors.
 
 Docking does NOT require this package: any duck-typed module exposing
 export_backend() with the contract members works (registry + conformance

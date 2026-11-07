@@ -52,15 +52,15 @@ plus per-backend schema references.
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
       ("registered (next session)" in `memrack_status`)
-- [x] backend SDK (T-015): `memrack.sdk.MemrackBackend` base (fts5/lock/degrade lessons
+- [x] backend SDK: `memrack.sdk.MemrackBackend` base (fts5/lock/degrade lessons
       pre-built, OPTIONAL — duck-typing remains the law), `memrack.conformance`
       (`check_backend`/`assert_conformance` + standalone runner), `backends/_template.py`
       + `docs/backend-guide.md` — target: foreign backend 0→docked in <15 min
-- [x] state-episodic backend (T-023): READ-ONLY search over the canonical session
+- [x] state-episodic backend: READ-ONLY search over the canonical session
       history (`state.db`, mode=ro, no copies, no triggers), default ON
-- [x] provider CLI (T-012): `hermes memrack status|report|export|import` — the heat
+- [x] provider CLI: `hermes memrack status|report|export|import` — the heat
       report (hot facts, never-read count) is the curation basis; surfaces only when active
-- [x] config surfaces (T-014/T-024): CLI-wizard schema (str-convention) + desktop panel
+- [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
 
 ## Install (experimental, not yet published)
