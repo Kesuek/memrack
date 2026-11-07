@@ -149,7 +149,10 @@ class BaseDbBackend:
             rowid = cur.lastrowid
             target = target_hint or "base-db:%d" % rowid
             self._db.execute("UPDATE facts SET target=? WHERE id=?", (target, rowid))
-            self._fts_rebuild()
+            # hot path: incrementally index the ONE new row (external-content FTS5);
+            # the full 'rebuild' pass stays on cold paths (remove/pointer) only
+            self._db.execute("INSERT INTO facts_fts(rowid, content) VALUES(?, ?)",
+                             (rowid, content))
             self._db.commit()
         return {"status": "stored", "id": rowid, "target": target, "ts": now}
 
@@ -182,7 +185,7 @@ class BaseDbBackend:
         try:
             import urllib.request, json as _json
             with urllib.request.urlopen(
-                    self._OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=3) as resp:
+                    self._OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=1) as resp:
                 tags = _json.load(resp)
         except Exception as exc:
             self._vec_gap = "%s not reachable: %s" % (self._OLLAMA_HOST, exc)
@@ -310,10 +313,9 @@ class BaseDbBackend:
         tokens = [t for t in re.split(r"\W+", m) if t]
         if not tokens:
             return '"%" '
-        joiner = " OR " if len(cols) > 1 else " "
         if len(cols) > 1:
             return " OR ".join('%s:(%s)' % (c, " ".join('"%s"' % t for t in tokens)) for c in cols)
-        return " ".join('"%s"' % t for t in tokens)
+        return " OR ".join('"%s"' % t for t in tokens)   # OR + rank: long queries keep recall
 
     def touch(self, ids):
         """Heat-Signal (SPEC §3.3): hits++ auf returned fact rows — Report-Basis, kein Trigger."""
@@ -332,16 +334,24 @@ class BaseDbBackend:
         return None
 
     def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
+        # S-3 law: the target identifies THE ENTRY, not the file — every mirrored write gets
+        # a per-entry target (hash8 suffix, same convention as the legacy import). A shared
+        # target would let the RRF merge collapse N entries into one and a remove sweep
+        # every sibling away.
+        import hashlib
+        tag_hash = hashlib.sha256((content or "").encode("utf-8")).hexdigest()[:8]
+        base_target = "builtin:%s" % (target or "memory")
         if action in ("add", "patch", "replace"):
             return self.write("explicit", content,
                               tags=[action] if action not in ("add",) else None,
-                              target_hint="builtin:%s" % (target or "memory"),
+                              target_hint="%s#%s" % (base_target, tag_hash),
                               session_id=session_id)
         if action == "remove":
             assert self._db is not None
             with self._lock:
+                precise_target = "%s#%s" % (base_target, tag_hash)
                 self._db.execute("DELETE FROM facts WHERE content=? OR target=?",
-                                 ((content or "").strip(), "builtin:%s" % (target or "memory")))
+                                 ((content or "").strip(), precise_target))
                 self._fts_rebuild()
                 self._db.commit()
             return {"status": "removed", "needle": content}
