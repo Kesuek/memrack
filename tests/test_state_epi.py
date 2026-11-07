@@ -89,7 +89,7 @@ def test_no_state_db_is_honest_init_failure(tmp_path):
 
 
 def test_rack_includes_it_by_default(tmp_path):
-    """T-009-Ronny-Wunsch: die Session-Historie wird AUTOMATISCH mit durchsucht —
+    """T-023: die Session-Historie wird AUTOMATISCH mit durchsucht —
     default-enabled, kein extra-Config nötig."""
     assert "state-episodic" in mr._DEFAULT_ENABLED
     assert "episodic" in mr._SEARCH_MODES

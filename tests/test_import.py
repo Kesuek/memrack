@@ -32,7 +32,7 @@ def test_import_both_files_stores_rows(tmp_path):
     home = _home_with_memories(tmp_path, [
         "Kommunikation: iMessage + Talk; Config nur per hermes config set",
         "Terminal cap ~420s foreground; lange Befehle background=true",
-    ], user_entries=["Ronny arbeitet in Europe/Berlin; Sprache Deutsch"])
+    ], user_entries=["The user works in Europe/Berlin; language German"])
     prov = _fresh_importer(home)
     out = json.loads(prov.handle_tool_call("memrack_import", {}))
     assert out["imported"] == 3 and out["duplicates"] == 0

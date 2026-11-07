@@ -100,9 +100,9 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
     assert fake.init_calls == [("S1", str(tmp_path))]
 
     prov.sync_turn("u", "a")
-    prov.on_memory_write("add", "memory", "Ronny likes memrack")
+    prov.on_memory_write("add", "memory", "the user likes memrack")
     assert fake.turns == ("u", "a", "S1")
-    assert fake.writes == [("add", "memory", "Ronny likes memrack")]
+    assert fake.writes == [("add", "memory", "the user likes memrack")]
     assert prov.prefetch("wer") == "FAKE-HIT: wer"
     spb = prov.system_prompt_block()
     assert spb.startswith("FAKE-SPB")                       # wrapped provider block first

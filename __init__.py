@@ -28,7 +28,7 @@ __version__ = "0.4.0"
 
 # Write kinds (plain strings: docked modules load via spec_from_file_location
 # and compare by VALUE, never by identity).
-# Write-KINDS vocabulary (third-man A-3 adopted: semantic is a SEARCH MODE (vec),
+# Write-KINDS vocabulary (A-3 adopted: semantic is a SEARCH MODE (vec),
 # curation happens via file tools/curation imports — neither is a write kind).
 EXPLICIT = "explicit"   # scalar facts, config values, exact identifiers
 CURATED = "curated"     # facts imported from curation (memrack import / kuratur)
@@ -36,9 +36,9 @@ EPISODIC = "episodic"   # routing-only kind: turns live in Hermes state.db, neve
 WRITE_KINDS = (EXPLICIT, CURATED)   # what memrack_write accepts
 
 DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
-# state-episodic default-ON (read-only über die state.db — T-009-Ronny-Wunsch:
-# memory-Abfragen durchsuchen die Session-Historie automatisch; das state.db
-# bleibt kanonisch/ro — kein Copy, kein Trigger)
+# state-episodic default-ON (read-only über die state.db — T-023: explicitly
+# requested: memory queries search the session history automatically; das
+# state.db bleibt kanonisch/ro — kein Copy, kein Trigger)
 _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
 
 
@@ -726,7 +726,7 @@ class _MemrackBase:
                     _LOG.warning("memrack touch failed (%s): %s", bname, exc)
 
 
-    # ── T-020: Alt-Import-Job (third-man B-2) — VORBEDINGUNG der Profil-Migration ──
+    # ── T-020: Alt-Import-Job (B-2) — VORBEDINGUNG der Profil-Migration ──
     def _tool_import(self, args):
         """Liest builtin-memory-Files (MEMORY.md/USER.md, §-delimited) und importiert
         jeden Eintrag als fact-Row: hash-dedupe = idempotent (doppelt laufen lassen

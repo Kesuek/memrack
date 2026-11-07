@@ -1,4 +1,4 @@
-"""T-013 VOLLSTAND (third-man S-1/B-3): the Basisfall is PROVEN, not claimed.
+"""T-013 VOLLSTAND (S-1/B-3): the Basisfall is PROVEN, not claimed.
 
 Stage ladder from SPEC §1.4 — each stage as its own test, each with a real provable
 edge. A fresh HERMES_HOME with ONLY base-db must carry everything.
@@ -104,7 +104,7 @@ def test_stage2_vec_off_is_card_note_not_error(tmp_path):
 
 
 def test_stage3_readonly_home_fails_closed(tmp_path):
-    """SPEC §1.4 (third-man-fixiert): read-only plugin-data → Init scheitert ehrlich →
+    """SPEC §1.4 (fixiert): read-only plugin-data → Init scheitert ehrlich →
     frameworkseitiges Fallback auf builtin. Kein halbtoter Provider."""
     # Simulieren des nicht nutzbaren Pfads: OWNER-Verriegelung mit chmod rollt das engine-eigene
     # 0700 zurück — deshalb wir der Pfad als DATEI angelegt (mkdir/öffnen scheitert hart)

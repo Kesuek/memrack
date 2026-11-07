@@ -1,4 +1,4 @@
-"""T-014a: the DESKTOP config surface (Ronny-Befund: Zahnrad → Plugins → memrack zeigte
+"""T-014a: the DESKTOP config surface (Befund: Zahnrad → Plugins → memrack zeigte
 KEINE Konfiguration). Die Desktop-UI ruft /config?surface=declared auf — die rendert
 NUR aus config_schema.py (CONFIG_SCHEMA, pure data) und schreibt storage=flat_json
 (<hermes_home>/memrack/config.json). memrack liest bislang NUR plugins.memrack aus

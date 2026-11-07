@@ -1,5 +1,5 @@
 """Router tests v0.3: the REAL router (_routed_for_kind) — the dead route()/ROUTE_TABLE
-is removed (third-man A-1: the live router was untested, the tested one wrong)."""
+is removed (A-1: the live router was untested, the tested one wrong)."""
 
 
 import importlib.util

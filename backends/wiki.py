@@ -21,7 +21,7 @@ _TOKEN = re.compile(r"[\w\-\.\:/]+", re.UNICODE)
 
 
 def _utcnow_iso():
-    """UTC, Mikrosekunden, Z-Suffix — die ts-Norm des Merges (third-man A-5)."""
+    """UTC, Mikrosekunden, Z-Suffix — die ts-Norm des Merges (A-5)."""
     import datetime as _dt
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 

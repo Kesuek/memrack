@@ -56,7 +56,7 @@ def test_vec_card_reports_capability(tmp_path):
 def test_vec_search_roundtrip(tmp_path):
     e = _engine(tmp_path)
     e.write("explicit", "Der IOWAP Relay Cluster laeuft auf LXC 903 im Keller")
-    e.write("explicit", "Ronny investiert monatlich 25 Euro in ETF-Sparplaene")
+    e.write("explicit", "The user invests 25 Euro monthly in ETF plans")
     hits = e.search("wo laeuft der AI Relay Cluster", "vec", 8)
     assert hits, "vec search must hit the paraphrase"
     assert "IOWAP Relay" in hits[0]["content"]

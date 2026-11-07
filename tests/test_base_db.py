@@ -64,8 +64,8 @@ def test_touch_increments_hits(eng):
 
 
 def test_on_memory_write_mirrors_builtin_target(eng):
-    eng.on_memory_write("add", "memory", "Ronny mag sqlite", session_id="S1")
-    hits = eng.search("Ronny mag sqlite", "fts", 8)
+    eng.on_memory_write("add", "memory", "the user likes sqlite", session_id="S1")
+    hits = eng.search("the user likes sqlite", "fts", 8)
     assert hits and hits[0]["target"].startswith("builtin:")
 
 
