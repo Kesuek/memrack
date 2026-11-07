@@ -1,4 +1,4 @@
-"""T-020: Alt-Import-Job — builtin-Memory-Files (§-delimited) → fact-Rows, idempotent."""
+"""legacy import job — builtin memory files (§-delimited) → fact rows, idempotent."""
 import importlib.util
 import pathlib
 import sys
@@ -47,7 +47,7 @@ def test_import_is_idempotent(tmp_path):
     first = json.loads(prov.handle_tool_call("memrack_import", {}))
     assert first["imported"] == 1
     second = json.loads(prov.handle_tool_call("memrack_import", {}))
-    assert second["imported"] == 0 and second["duplicates"] == 1   # hash-dedupe, kein Doppel
+    assert second["imported"] == 0 and second["duplicates"] == 1   # hash-dedupe, no duplicates
     facts = prov._rack["base-db"].export()
     assert facts["facts"] == 1
 
@@ -56,7 +56,7 @@ def test_import_filters_noise_and_missing_files(tmp_path):
     home = _home_with_memories(tmp_path, ["ok", "", "gueltiger eintrag lang genug"])
     prov = _fresh_importer(home)
     out = json.loads(prov.handle_tool_call("memrack_import", {"source": "memory"}))
-    assert out["imported"] == 1            # noise (<10 chars / leer) weggefiltert
+    assert out["imported"] == 1            # noise (<10 chars / empty) filtered out
     out = json.loads(prov.handle_tool_call("memrack_import", {"source": "user"}))
     assert out["imported"] == 0 and any(f.get("note") == "not present" for f in out["files"])
 

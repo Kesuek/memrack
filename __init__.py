@@ -8,8 +8,7 @@ content); no LLM judge anywhere — not at write ("Dreaming" lesson,
 2026-08-29) and not at read (no 'auto'-mode).
 
 The Basisfall is design law: with only the built-in `base-db` backend
-(stdlib-only), the whole memory works — fresh HERMES_HOME, zero docking
-(design law — the proof lives as the T-013 test on the board; the runtime half lands with T-008).
+(stdlib-only), the whole memory works — fresh HERMES_HOME, zero docking.
 """
 
 import importlib.util
@@ -36,9 +35,9 @@ EPISODIC = "episodic"   # routing-only kind: turns live in Hermes state.db, neve
 WRITE_KINDS = (EXPLICIT, CURATED)   # what memrack_write accepts
 
 DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
-# state-episodic default-ON (read-only über die state.db — T-023: explicitly
-# requested: memory queries search the session history automatically; das
-# state.db bleibt kanonisch/ro — kein Copy, kein Trigger)
+# state-episodic default-ON (read-only over the state.db — memory queries
+# search the session history automatically; the state.db stays canonical/ro —
+# no copy, no trigger)
 _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
 
 
@@ -46,7 +45,7 @@ _SEARCH_MODES = ("fts", "vec", "pointers", "episodic")
 
 
 def _truthy(value):
-    """T-025 read-side truth for toggles: wizard writes "true"/"false" strings,
+    """Read-side truth for toggles: wizard writes "true"/"false" strings,
     the desktop writes native bools — both must mean the same."""
     if isinstance(value, bool):
         return value
@@ -54,7 +53,7 @@ def _truthy(value):
 
 
 def _norm_backends(value):
-    """T-014: wizard-safe read of enabled_backends — the setup wizard writes ONE
+    """Wizard-safe read of enabled_backends — the setup wizard writes ONE
     string (comma list), a hand-edited config.yaml writes a yaml list; both must
     rack identically. Unknown names are NOT filtered here: the registry parks
     them (honest inventory), this only repairs the TYPE."""
@@ -71,7 +70,7 @@ _MEMORY_WRITE_TYPES = tuple(
 
 
 def _utcnow_iso():
-    """UTC, Mikrosekunden, Z-Suffix — String-Vergleich über Backends hinweg konsistent (A-5)."""
+    """UTC, microseconds, Z-suffix — string comparison consistent across backends (A-5)."""
     import datetime as _dt
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 #
@@ -157,8 +156,8 @@ def _card(backend) -> dict:
     dyn = getattr(backend, "card_modes", None)
     live = tuple(dyn()) if callable(dyn) else None
     declared = tuple(man.get("search") or ())
-    # Beweis-Lektion (SDK-Nachweis #4): die Karte verspricht NIE mehr als die LIEFERUNG —
-    # der Manifest kann sie NICHT über die ehrliche (Umgebungs-)Karte hinaus überzeugen.
+    # Proof lesson (SDK proof #4): the card NEVER promises more than the DELIVERY —
+    # the manifest cannot out-claim the honest (environment-derived) card.
     modes = (live if live is not None
              else (declared or tuple(getattr(backend, "search_modes", ()))) )
     best_for = man.get("best_for") or getattr(backend, "best_for", "")
@@ -172,7 +171,7 @@ def _card(backend) -> dict:
         "search": callable(getattr(backend, "search", None)),
         "built_in": getattr(backend, "built_in", False),
         "origin": (man.get("module") or "code") if man else "code",
-        "declared": sorted(set(declared) - set(modes)),   # Manifest-Promisse OHNE Auslieferung (env)
+        "declared": sorted(set(declared) - set(modes)),   # manifest promise WITHOUT delivery (env)
     }
 
 
@@ -236,12 +235,12 @@ class _MemrackBase:
     def name(self) -> str:
         return PLUGIN_NAME
 
-    # ABC-PFLICHT (fehlte der Skill-ABC-Referenz!): Konfiguration/Deps-Gate, KEINE Netz-Calls.
-    # Die Basis-Basis (stdlib, SQLite) braucht nichts — immer bereit.
+    # ABC duty (was missing in the skill ABC reference!): config/deps gate, NO network calls.
+    # The base layer (stdlib, SQLite) needs nothing — always ready.
     def is_available(self) -> bool:
         return True
 
-    # T-014-Substanz: der Setup-Flow (`hermes memory setup memrack`) liest und schreibt diese
+    # read and written by the setup flow (`hermes memory setup memrack`)
     def get_config_schema(self):
         return [
             {
@@ -299,19 +298,19 @@ class _MemrackBase:
 
     # ── lifecycle ──
     def _profile_config(self, hermes_home) -> dict:
-        """`plugins.memrack.*` aus der PROFIL-Config-Datei — der Provider ist zur
-        Register-Zeit config-los geladen (der Manager injiziert nichts); die
-        Datei ist die live-Quelle (die wiki-memory-Convention).
-        T-014a: zweite Quelle = die DESKTOP-declared Surface (storage=flat_json,
-        `<hermes_home>/<name>/config.json`, 0600) — die UI schreibt NUR dorthin;
-        ihre Keys gewinnen (frischeste Nutzer-Intention), yaml-only Keys bleiben."""
+        """`plugins.memrack.*` from the PROFILE config file — the provider is loaded
+        config-less at register time (the manager injects nothing); the
+        file is the live source (the wiki-memory convention).
+        Second source = the DESKTOP-declared surface (storage=flat_json,
+        `<hermes_home>/<name>/config.json`, 0600) — the UI writes ONLY there;
+        its keys win (freshest user intent), yaml-only keys remain."""
         merged: dict = {}
         try:
             import yaml
             raw = yaml.safe_load((Path(hermes_home) / "config.yaml").read_text(encoding="utf-8")) or {}
             merged.update(dict((raw.get("plugins") or {}).get(PLUGIN_NAME) or {}))
         except Exception:
-            pass          # kaputtes yaml darf die Desktop-Config nicht töten
+            pass          # broken yaml must not kill the desktop config
         try:
             import json
             flat = _hermes_home(hermes_home) / PLUGIN_NAME / "config.json"
@@ -324,7 +323,7 @@ class _MemrackBase:
         return merged
 
     def save_config(self, values, hermes_home=None):
-        """T-014: setup-consumer contract — the wizard hands values back; write the
+        """Setup-consumer contract — the wizard hands values back; write the
         SAME block _profile_config reads (``plugins.memrack`` in config.yaml,
         wiki-memory convention). Failure = warning, never a setup crash."""
         config_path = _hermes_home(hermes_home) / "config.yaml"
@@ -340,8 +339,8 @@ class _MemrackBase:
                 yaml.dump(existing, default_flow_style=False, allow_unicode=True),
                 encoding="utf-8")
 
-            # T-014a Mirror: die Desktop-Panel-Quelle mitführen (merge, 0600),
-            # sonst zeigt die UI nach einem Wizard-Setup die Defaults statt den Zustand.
+            # Mirror: keep the desktop-panel source in sync (merge, 0600) —
+            # otherwise the UI shows defaults instead of the state after a wizard setup.
             import json
             flat_dir = _hermes_home(hermes_home) / PLUGIN_NAME
             flat_dir.mkdir(parents=True, exist_ok=True)
@@ -370,10 +369,10 @@ class _MemrackBase:
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
-        self._config.update(self._profile_config(self._hermes_home))   # Datei gewinnt die live-Keys
+        self._config.update(self._profile_config(self._hermes_home))   # the file wins the live keys
 
         enabled = _norm_backends(self._config.get("enabled_backends"))
-        if _truthy(self._config.get("auto_enable")):   # T-025: activation auto-provision —
+        if _truthy(self._config.get("auto_enable")):   # activation auto-provision —
             for b in ("base-db", "wiki"):              # merge only, never a disable
                 if b not in enabled:
                     enabled.append(b)
@@ -383,8 +382,8 @@ class _MemrackBase:
         self._load_errors = rack["errors"]
         self._cards = {n: _card(b) for n, b in self._rack.items()}
 
-        # initialize every rack member; a member that fails to init = Gap (Degradations-Leiter),
-        # but the DEFAULT/FORCED target failing is fatal (Basisfall-Pflicht).
+        # initialize every rack member; a member that fails to init = Gap (degradation ladder),
+        # but the DEFAULT/FORCED target failing is fatal (Basisfall duty).
         target = self._pick_default_target()
         initialized = {}
         for bname, backend in sorted(self._rack.items()):
@@ -423,7 +422,7 @@ class _MemrackBase:
         forced = self._config.get("backend")
         target = forced or DEFAULT_BACKEND
         if target not in self._rack and len(self._rack) == 1:
-            # Basisfall-Regel: single-backend-rack → dorthin, egal wie es heißt
+            # Basisfall rule: single-backend rack → go there, whatever its name
             target = next(iter(self._rack))
         return target
 
@@ -435,7 +434,7 @@ class _MemrackBase:
         if self._force:
             return self._active
         if kind == EPISODIC:
-            return self._rack.get("wiki")   # session-writer, oder None (state.db ist kanonisch)
+            return self._rack.get("wiki")   # session-writer, or None (state.db is canonical)
         return self._rack.get(self._pick_default_target_for_writes())   # explicit/curated
 
     def _pick_default_target_for_writes(self):
@@ -545,7 +544,7 @@ class _MemrackBase:
                 extra))
         if len(lines) > 9:
             overflow = len(self._cards) - 8
-            lines = lines[:9] + ["- … +%d weitere Backends — memrack_status" % overflow]
+            lines = lines[:9] + ["- … +%d more backends — memrack_status" % overflow]
         return "\n".join(lines)
 
     def shutdown(self):
@@ -635,7 +634,7 @@ class _MemrackBase:
                 return fn(tool_name, args, **kwargs)
         raise KeyError("unknown memrack tool %r" % tool_name)
 
-    # ── search: fan-out + EINE Fusionsregel (SPEC §3.2/§3.3) ──
+    # ── search: fan-out + ONE fusion rule (SPEC §3.2/§3.3) ──
     def _tool_search(self, args):
         started = time.time()
         query = str(args.get("query") or "").strip()
@@ -664,8 +663,8 @@ class _MemrackBase:
         runs, engine_errors = [], []
         carried = sorted({m for b in chosen for m in self._cards[b.name]["modes"]})
         if mode != "all" and mode not in carried:
-            # SPEC §1.4 Degradation: ein spezifisch angefragt modus, den KEIN im Rack liegender
-            # Backend trägt, ist ein ehrlicher Error — niemals stilles 0-Ergebnis.
+            # SPEC §1.4 Degradation: a specifically requested mode that NO backend
+            # in the rack carries is an honest error — never a silent zero-result.
             return json.dumps({
                 "error": "no backend carries mode %r" % mode,
                 "hint": "available modes: %s" % (", ".join(carried) or "none"),
@@ -706,7 +705,7 @@ class _MemrackBase:
 
     @staticmethod
     def _rrf_merge(runs, limit):
-        """RRF 60 + collapse per target + deterministischer Tiebreak — SPEC §3.3."""
+        """RRF 60 + collapse per target + deterministic tiebreak — SPEC §3.3."""
         pool: dict = {}
         for hits in runs:
             for hit in hits:
@@ -746,11 +745,11 @@ class _MemrackBase:
                     _LOG.warning("memrack touch failed (%s): %s", bname, exc)
 
 
-    # ── T-020: Alt-Import-Job (B-2) — VORBEDINGUNG der Profil-Migration ──
+    # ── legacy import job — prerequisite of the profile migration ──
     def _tool_import(self, args):
-        """Liest builtin-memory-Files (MEMORY.md/USER.md, §-delimited) und importiert
-        jeden Eintrag als fact-Row: hash-dedupe = idempotent (doppelt laufen lassen
-        schadet nicht), target='builtin:<file>'. EIN Job pro Profil, kein Cron."""
+        """Reads builtin-memory files (MEMORY.md/USER.md, §-delimited) and imports
+        each entry as a fact row: hash-dedupe = idempotent (running it twice
+        does no harm), target='builtin:<file>'. ONE job per profile, no cron."""
         source = (args.get("source") or "both")
         if source not in ("memory", "user", "both"):
             return json.dumps({"error": "source: memory|user|both"}, ensure_ascii=False)
@@ -776,9 +775,9 @@ class _MemrackBase:
             file_imported = file_dup = 0
             for entry in entries:
                 try:
-                    # S-3-HARDENING: das Target identifiziert DEN EINTRAG, NICHT die Datei —
-                    # der RRF-Merge collapsed per target: ein File-Full-Target würde
-                    # N-1 Treffer stillschweigend verschluckt.
+                    # S-3-HARDENING: the target identifies THE ENTRY, NOT the file —
+                    # the RRF merge collapses per target: a file-wide target would
+                    # silently swallow N-1 hits.
                     tag_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()[:8]
                     out = backend.write(EXPLICIT, entry,
                                         target_hint="%s#%s" % (prefix, tag_hash),
@@ -815,7 +814,7 @@ class _MemrackBase:
                                "hint": "registered: %s" % ", ".join(sorted(self._rack))},
                               ensure_ascii=False)
         backend = self._rack.get(backend_wish) if backend_wish else \
-            self._routed_for_kind(kind)   # keine Wahl = deterministische Quelle-Regel
+            self._routed_for_kind(kind)   # no choice = deterministic source rule
         if backend is None:
             return json.dumps({"error": "no backend for kind %r in the rack" % kind,
                                "hint": "memrack_status shows the cards"})

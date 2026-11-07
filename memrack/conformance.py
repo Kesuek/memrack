@@ -20,7 +20,7 @@ def check_backend(obj, *, tmp_home=None) -> dict:
     errors = warnings = []
     report = {"errors": (errors := []), "warnings": (warnings := [])}
 
-    # 1) required surface (name = attr, nicht callable — als Karte separat geprüft)
+    # 1) required surface (name = attr, not callable — checked separately as the card)
     for member in ("initialize", "on_turn", "on_memory_write", "on_session_end",
                    "prefetch", "system_prompt_block", "shutdown", "export"):
         if not callable(getattr(obj, member, None)):
@@ -64,8 +64,8 @@ def check_backend(obj, *, tmp_home=None) -> dict:
                                 break
                         if hit.get("kind") == "fact" and "hits" not in hit:
                             warnings.append(
-                                "hit-shape: fact-hit ohne 'hits' verliert den "
-                                "Heat-Tiebreak still (A-6) — Feld liefern")
+                                "hit-shape: fact-hit without 'hits' silently loses the "
+                                "heat tiebreak (A-6) — supply the field")
             obj.shutdown()
         except NotImplementedError as exc:
             _err(errors, "contract", "initialize NotImplementedError: %s" % exc)
@@ -83,9 +83,9 @@ def assert_conformance(obj, *, tmp_home=None):
 
 
 def _apply_sidecar_manifest(obj, path) -> dict:
-    """Docking-Gleichheit: der Runner wendet ein benachbartes MANIFEST an und prüft
-    die CLAIMS (behauptete Modi ohne Implementierung = same registry-error).
-    Ohne Sidecar: pure file-level check (card = code-attrs)."""
+    """Docking parity: the runner applies an adjacent MANIFEST and checks the
+    CLAIMS (claimed modes without implementation = same registry-error).
+    Without sidecar: pure file-level check (card = code-attrs)."""
     import yaml
     report = {"manifest": None, "card_source": "code-attrs"}
     for cand in (path.with_suffix(".yaml"), path.with_suffix(".yml")):
@@ -100,8 +100,8 @@ def _apply_sidecar_manifest(obj, path) -> dict:
                 if not callable(getattr(obj, "search", None)):
                     report["errors"].append({"kind": "card-lie",
                                              "error": "manifest claim %r without a search method" % claimed})
-            # falsy-tuple-Trap: live==() ist eine EHRLEICHE Karte (root unkonfiguriert) —
-            # JEDE Behauptung ist dann un-armed, nicht "kein Prüf"
+            # falsy-tuple trap: live==() is an HONEST card (root unconfigured) —
+            # every claim is then un-armed, not "no check"
             report["declared_not_armed"] = [m for m in (man.get("search") or ()) if m not in live]
             break
     return report

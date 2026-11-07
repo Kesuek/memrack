@@ -120,39 +120,39 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
 
 
 def test_basisfall_solo_base_db_fresh_home(tmp_path):
-    """T-013-Essenz: frischer HERMES_HOME, kein Docking, kein Wiki — NUR base-db läuft."""
-    prov = mr._MemrackBase()          # enabled default = ("base-db",) → wiki geparkt
+    """Essence: fresh HERMES_HOME, no docking, no wiki — ONLY base-db runs."""
+    prov = mr._MemrackBase()          # enabled default = ("base-db",) → wiki parked
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     assert prov._active.name == "base-db"
-    assert any(p["name"] == "wiki" for p in prov._parked)   # wiki = opt-in, geparkt (kein Error!)
-    # kompletter Basis-Umfang: write / search / status
+    assert any(p["name"] == "wiki" for p in prov._parked)   # wiki = opt-in, parked (no error!)
+    # full basic scope: write / search / status
     out = prov.handle_tool_call("memrack_write", {"content": "Relay LXC 903 laeuft auf 192.168.2.60"})
     assert '"stored"' in out
     search = prov.handle_tool_call("memrack_search", {"query": "Relay laeuft"})
     assert '"Relay LXC 903' in search and '"fts"' in search
     status = prov.handle_tool_call("memrack_status", {})
     assert '"base-db"' in status
-    # turn-Regel: ohne Wiki wird episodic NICHT kopiert (state.db ist kanonisch)
+    # turn rule: without the wiki, episodic is NOT copied (state.db is canonical)
     prov.sync_turn("u", "a")
     rows = prov.status()
     assert rows["backends"] == ["base-db"]
-    # Heat: der Suchtreffer hat hits erhoeht
+    # heat: the search hit has raised hits
     counts = prov.get_tool_schemas()
     assert "memrack_search" in [s["function"]["name"] for s in counts]
 
 
 def test_search_targeted_backend_and_mode_errors(tmp_path):
-    """SPEC §3.1-Validierung: kein stilles 0-Ergebnis — Errors nennen verfügbare Modi."""
+    """SPEC §3.1 validation: no silent zero results — errors name available modes."""
     prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
-    # Unknown-Backend → Error mit Inventar
+    # unknown backend → error with inventory
     out = prov.handle_tool_call("memrack_search", {"query": "x", "backend": "nosuch"})
     assert '"error"' in out and "registered:" in out
-    # base-db trägt KEIN vec → explizite Fehlermeldung mit verfügbaren Modi (SPEC §1.4)
+    # base-db carries NO vec → explicit error naming available modes (SPEC §1.4)
     out = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
     assert '"error"' in out and "no backend carries mode 'vec'" in out
-    assert "fts, pointers" in out   # verfügbare Modi namentlich
-    # gezieltes fts funktioniert
+    assert "fts, pointers" in out   # available modes by name
+    # targeted fts works
     prov.handle_tool_call("memrack_write", {"content": "Ein Fakt"})
     out = prov.handle_tool_call("memrack_search", {"query": "Fakt", "backend": "base-db", "mode": "fts"})
     assert '"Ein Fakt"' in out
@@ -162,11 +162,11 @@ def test_search_empty_result_carries_hint(tmp_path):
     prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     out = prov.handle_tool_call("memrack_search", {"query": "gibts nicht"})
-    assert '"hint"' in out   # kein stilles leer-Array
+    assert '"hint"' in out   # no silent empty array
 
 
 def test_write_to_wiki_is_guided_error_when_parked(tmp_path):
-    """wiki ist opt-in: memrack_write(backend='wiki') im Basisfall = guided error."""
+    """wiki is opt-in: memrack_write(backend='wiki') in the Basisfall = guided error."""
     prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     out = prov.handle_tool_call("memrack_write", {"content": "x", "backend": "wiki"})

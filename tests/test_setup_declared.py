@@ -1,8 +1,8 @@
-"""T-014a: the DESKTOP config surface (Befund: Zahnrad → Plugins → memrack zeigte
-KEINE Konfiguration). Die Desktop-UI ruft /config?surface=declared auf — die rendert
-NUR aus config_schema.py (CONFIG_SCHEMA, pure data) und schreibt storage=flat_json
-(<hermes_home>/memrack/config.json). memrack liest bislang NUR plugins.memrack aus
-config.yaml — beide Stores müssen zum RACKING zusammenlaufen.
+"""the DESKTOP config surface (finding: gear → Plugins → memrack showed
+NO configuration). The desktop UI calls /config?surface=declared — it renders
+ONLY from config_schema.py (CONFIG_SCHEMA, pure data) and writes storage=flat_json
+(<hermes_home>/memrack/config.json). memrack so far reads ONLY plugins.memrack from
+config.yaml — both stores must converge for RACKING.
 """
 import importlib.util
 import json
@@ -77,9 +77,9 @@ def test_profile_config_flat_json_beats_yaml_per_key(tmp_path):
                                 "search_top_k": 16}), encoding="utf-8")
     prov = mr._MemrackBase()
     merged = prov._profile_config(str(tmp_path))
-    assert merged["enabled_backends"] == "base-db"   # Desktop-Edit gewinnt
-    assert merged["search_top_k"] == 16              # flat-only key kommt durch
-    assert merged["legacy_key"] == 1                 # yaml-only key bleibt
+    assert merged["enabled_backends"] == "base-db"   # desktop edit wins
+    assert merged["search_top_k"] == 16              # flat-only key comes through
+    assert merged["legacy_key"] == 1                 # yaml-only key stays
 
 
 def test_profile_config_without_flat_json(tmp_path):
@@ -93,7 +93,7 @@ def test_profile_config_without_flat_json(tmp_path):
 
 
 def test_profile_config_yaml_broken_still_reads_flat_json(tmp_path):
-    """Ein kaputtes config.yaml darf die Desktop-Config nicht töten (stiller Ausfall)."""
+    """A broken config.yaml must not kill the desktop config (silent failure)."""
     (tmp_path / "config.yaml").write_text("{ broken yaml!!", encoding="utf-8")
     (tmp_path / "memrack").mkdir()
     (tmp_path / "memrack" / "config.json").write_text(
@@ -102,7 +102,7 @@ def test_profile_config_yaml_broken_still_reads_flat_json(tmp_path):
     assert prov._profile_config(str(tmp_path)) == {"backend": "base-db"}
 
 
-# ── the wizard write mirrors into the desktop store (surfaces konvergieren) ──
+# ── the wizard write mirrors into the desktop store (surfaces converge) ──
 
 def test_save_config_writes_both_stores(tmp_path):
     prov = mr._MemrackBase()
@@ -128,7 +128,7 @@ def test_save_config_flat_json_merges_not_replaces(tmp_path):
 # ── end to end: racking follows the DESKTOP store alone ──────────────────────
 
 def test_initialize_racks_from_flat_json_alone(tmp_path):
-    """Nicht-yaml-Store konfiguriert das Rack — genau der Desktop-Pfad."""
+    """A non-yaml store configures the rack — exactly the desktop path."""
     (tmp_path / "memrack").mkdir()
     (tmp_path / "memrack" / "config.json").write_text(
         json.dumps({"enabled_backends": "base-db,state-episodic"}),

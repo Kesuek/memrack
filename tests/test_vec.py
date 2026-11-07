@@ -1,4 +1,4 @@
-"""T-007 vec engine: OPTIONAL upgrade — sqlite-vec + nomic via ollama.
+"""vec engine: OPTIONAL upgrade — sqlite-vec + nomic via ollama.
 Skips entirely when the environment lacks them (Basisfall must not depend on this).
 """
 import importlib.util
@@ -67,5 +67,5 @@ def test_vec_index_is_incremental(tmp_path):
     e.write("explicit", "Erster Fakt fuer Embedding")
     e.search("Erster Fakt", "vec", 8)                  # pass 1 embeds row 1
     e.write("explicit", "Zweiter Fakt spaeter dazu")
-    hits = e.search("Zweiter Fakt", "vec", 8)          # pass 2 embeds nur den fehlenden
+    hits = e.search("Zweiter Fakt", "vec", 8)          # pass 2 embeds only the missing row
     assert hits and "Zweiter Fakt" in hits[0]["content"]

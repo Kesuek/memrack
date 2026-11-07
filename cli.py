@@ -1,4 +1,4 @@
-"""``hermes memrack <sub>`` — the provider CLI (T-012).
+"""``hermes memrack <sub>`` — the provider CLI.
 
 Discovery imports ONLY this file at argparse setup (active-provider contract) —
 the provider/engine work happens lazily inside the handlers, per invocation,
@@ -6,9 +6,9 @@ against THIS profile's HERMES_HOME.
 
 Subcommands:
   status    — rack inventory + active/gaps/parked/pending-docks (memrack_status surface)
-  report    — the heat report: hot facts, never-read facts, pointers (Kuratur-Basis)
+  report    — the heat report: hot facts, never-read facts, pointers (Kuratur basis)
   export    — full JSON dump of the base-db store (facts + pointers) — backup/migration
-  import    — the alt-import job (builtin-Memory → fact rows; deterministic, idempotent)
+  import    — the legacy import job (builtin memory → fact rows; deterministic, idempotent)
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
         sub = subs.add_parser(name, help=help_)
         if name == "import":
             sub.add_argument("--source", choices=("memory", "user", "both"), default="both",
-                             help="Alt-Quelle (default: both)")
+                             help="legacy source (default: both)")
         sub.set_defaults(func=_run)
 
 

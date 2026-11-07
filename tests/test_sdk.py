@@ -1,4 +1,4 @@
-"""T-015 conformance harness + sdk base — the proof: template conforms, lies don't."""
+"""conformance harness + sdk base — the proof: template conforms, lies don't."""
 import importlib.util
 import pathlib
 import sys
@@ -54,18 +54,18 @@ def test_missing_card_is_a_warning_not_error(tmp_path):
 
 def test_fts_match_tokens_quotes_hyphens():
     out = sdk.fts_match_tokens("Relay LXC-Hit")
-    assert '"LXC"' in out and '"Hit"' in out    # der Hyphen-Zerlegte ist safe
+    assert '"LXC"' in out and '"Hit"' in out    # the hyphen-split token is safe
     assert out.count('"') % 2 == 0
     col = sdk.fts_match_tokens("Relay x", columns=["subject", "location"])
     assert "subject:(" in col and "location:(" in col
 
 
 def test_registry_accepts_sdk_base_instances(tmp_path):
-    """Die SDK-Basisklasse duck-passiert die Registry-Checks (kein Doppel-Regelwerk)."""
+    """The SDK base class duck-passes the registry checks (no duplicate rule set)."""
     obj = tpl.export_backend()
     obj2 = conf.check_backend(obj, tmp_home=tmp_path)
     validated = __import__("memrack")._validate_backend_for_registry if False else None
-    # ensure_backend des Plugins = dieselbe Struktur ohne SDK-Import:
+    # the plugin's ensure_backend = same structure without the SDK import:
     mr = sys.modules["memrack"]
     cleaned = mr.ensure_backend(obj, origin="template")
     assert cleaned.name == "template"

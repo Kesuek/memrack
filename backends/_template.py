@@ -4,8 +4,8 @@ Minimal, self-contained backend: card as class attrs, two real methods.
 NO SDK requirement: this file runs standalone (the SDK is optional sugar).
 Dock via a manifest beside it:
 
-    name: mein-archiv
-    module: meine_backend_datei.py
+    name: my-archive
+    module: my_backend_file.py
     best_for: ...
     limits: ...
     search: [fts]
@@ -49,7 +49,7 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
 
     def __init__(self):
         if hasattr(MemrackBackend, "initialize"):
-            super().__init__()      # SDK-Zucker (seine RLock-Disziplin)
+            super().__init__()      # SDK sugar (its RLock discipline)
         self._lock = threading.RLock()
         self._db = None
 
@@ -58,8 +58,8 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
         base.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(base / "template-backend.db"),
                                    check_same_thread=False, timeout=5.0)
-        # UNIQUE = die Ledger-Idempotenz (kein Doppel-Row bei gleichem Inhalt);
-        # ts = UTC-Z-µs (Gesetzt 1); hits = Heat (Gesetze 2: fact-hits TRAGEN hits)
+        # UNIQUE = ledger idempotency (no double row on identical content);
+        # ts = UTC-Z-µs (law 1); hits = heat (law 2: fact hits CARRY hits)
         self._db.execute("CREATE TABLE IF NOT EXISTS notes"
                          "(id INTEGER PRIMARY KEY, text TEXT, hash TEXT UNIQUE,"
                          " ts TEXT, hits INTEGER DEFAULT 0)")
@@ -71,7 +71,7 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
         rows = self._db.execute(
             "SELECT id, text, ts, hits FROM notes").fetchall()
         tokens = [t.lower() for t in fts_match_tokens(query).replace('"', '').split()]
-        # Hit = die GANZE Row-Referenz (kind=fact: content klein ok); hits/ts = Gesetze 1+2
+        # Hit = the WHOLE row reference (kind=fact: small content ok); hits/ts = laws 1+2
         ranked = [({"backend": self.name, "kind": "fact", "rank": i,
                     "content": text, "target": "template:%d" % rid,
                     "ts": ts, "hits": hits})
@@ -80,7 +80,7 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
         return ranked[:k]
 
     def touch(self, ids):
-        """Gesetzt 2 die andere Richtung: hit-rauf nach der Merge-Auslieferung."""
+        """Law 2, the other direction: hit bump after merge delivery."""
         if not ids:
             return
         with self._lock:
@@ -95,7 +95,7 @@ class TemplateBackend(MemrackBackend if MemrackBackend is not object else object
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO notes(text, hash, ts) VALUES (?, ?, ?)",
                 (content, hash_, _utcnow_iso()))
-            if cur.rowcount == 0:   # dedupe: bestehend gewinnt, kein Doppel-Row
+            if cur.rowcount == 0:   # dedupe: existing wins, no double row
                 rid = self._db.execute("SELECT id FROM notes WHERE hash=?", (hash_,)).fetchone()[0]
                 return {"status": "duplicate", "id": rid, "target": "template:%d" % rid}
             rid = cur.lastrowid

@@ -29,7 +29,7 @@ def fts_match_tokens(query, *, columns=None):
 
 
 class MemrackBackend:
-    """Base class for memrack backends (T-015). Implement what you can:
+    """Base class for memrack backends. Implement what you can:
 
     REQUIRED: name (attr), initialize(session_id=, hermes_home=, provider_config=, **kw)
     OPTIONAL HOOKS (no-op defaults here): on_turn, on_memory_write, on_session_end,
@@ -45,7 +45,7 @@ class MemrackBackend:
     """
 
     name = "set-your-backend-name"
-    best_for = ""   # LEER = ungesetzt — die Conformance WARNT dann (keine Dummy-Texte)
+    best_for = ""   # empty = unset — the conformance warns about it (no dummy texts)
     limits = ""
     search_modes: tuple = ()      # claim only what search() really implements
     writeable = False
@@ -57,7 +57,7 @@ class MemrackBackend:
 
     # ── required ──
     def initialize(self, session_id="", hermes_home=None, provider_config=None, **kwargs):
-        raise NotImplementedError("backend implementiert initialize() — store/connections, no network in probes")
+        raise NotImplementedError("backend implements initialize() — store/connections, no network in probes")
 
     # ── optional hooks: safe no-ops (inherit and override what matters) ──
     def on_turn(self, user, assistant, *, session_id=""):

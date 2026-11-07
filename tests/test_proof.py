@@ -1,4 +1,4 @@
-"""T-015-Nachweis-Batch: guide-only proof results + the card-hierarchy lesson."""
+"""proof batch: guide-only proof results + the card-hierarchy lesson."""
 import importlib.util
 import pathlib
 import sys
@@ -42,9 +42,9 @@ def test_manifest_never_overrides_the_honest_card():
     b = DynBackend(root=None)
     b.manifest = {"name": "dyn", "module": "dyn.py", "search": ["fts"]}
     card = mr._card(b)
-    assert card["modes"] == []            # NIX versprochen (ehrlich!)
-    assert card["declared"] == ["fts"]    # der Überschuss bleibt sichtbar
-    # mit root: the delivery wins and arms exactly the mode
+    assert card["modes"] == []            # NOTHING promised (honest!)
+    assert card["declared"] == ["fts"]    # the excess stays visible
+    # with root: the delivery wins and arms exactly the mode
     b2 = DynBackend(root="/tmp")
     b2.manifest = {"name": "dyn", "module": "dyn.py", "search": ["fts"]}
     card2 = mr._card(b2)
@@ -64,6 +64,6 @@ def test_contrib_dirsearch_conforms_with_manifest(tmp_path):
     info = conf._apply_sidecar_manifest(obj, _ROOT / "contrib" / "dirsearch.py")
     assert info["manifest"] == "dirsearch.yaml"
     assert info["card_source"] == "manifest(+code-verify)"
-    assert info["declared_not_armed"] == ["fts"]   # ohne root: claim bleibt un-armed (ehrlich)
+    assert info["declared_not_armed"] == ["fts"]   # without root: claim stays un-armed (honest)
     report = conf.check_backend(obj, tmp_home=tmp_path)
     assert report["ok"], report

@@ -1,4 +1,4 @@
-"""T-014: the setup-consumer contract — get_config_schema wizard-ready + save_config
+"""the setup-consumer contract — get_config_schema wizard-ready + save_config
 writes the SAME block _profile_config reads (plugins.memrack), str-convention like
 wiki-memory (the wizard prompts TEXT; every list default/choice rides as a comma-string
 and is normalized at read).
@@ -89,8 +89,8 @@ def test_save_config_writes_plugins_memrack_block(tmp_path):
     prov.save_config({"enabled_backends": "base-db,wiki"}, str(tmp_path))
     data = _read_yaml(cfg)
     assert data["plugins"]["memrack"] == {"enabled_backends": "base-db,wiki"}
-    assert data["plugins"]["other"] == {"x": 1}          # Nachbar-Blocks bleiben
-    assert data["memory"]["provider"] == "wiki-memory"   # Aktivierung bleibt
+    assert data["plugins"]["other"] == {"x": 1}          # neighboring blocks remain
+    assert data["memory"]["provider"] == "wiki-memory"   # activation remains
 
 
 def test_save_config_replaces_block_keeps_rest(tmp_path):
@@ -100,13 +100,13 @@ def test_save_config_replaces_block_keeps_rest(tmp_path):
     prov = mr._MemrackBase()
     prov.save_config({"enabled_backends": "base-db,state-episodic"}, str(tmp_path))
     block = _read_yaml(cfg)["plugins"]["memrack"]
-    assert block == {"enabled_backends": "base-db,state-episodic"}   # Block ersetzt, nicht append
+    assert block == {"enabled_backends": "base-db,state-episodic"}   # block replaced, not appended
     assert "old_key" not in block
 
 
 def test_save_config_unwritable_home_no_crash(tmp_path, caplog):
-    """Setup darf nie an der Persistenz scheitern — Fail = Log, nicht Exception."""
+    """Setup must never fail on persistence — failure = log, not exception."""
     block = tmp_path / "config.yaml"
-    block.mkdir()                      # Pfad ist ein DIR → Schreiben scheitert
+    block.mkdir()                      # path is a DIR → writing fails
     prov = mr._MemrackBase()
     prov.save_config({"enabled_backends": "base-db"}, str(tmp_path))   # no raise

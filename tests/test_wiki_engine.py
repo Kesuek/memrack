@@ -1,4 +1,4 @@
-"""T-007 wiki engine: in-memory page index — pure stdlib, no Hermes runtime needed."""
+"""wiki engine: in-memory page index — pure stdlib, no Hermes runtime needed."""
 import importlib.util
 import pathlib
 import sys
@@ -42,7 +42,7 @@ def test_and_semantics_excludes_pages_missing_a_token(idx):
 
 def test_title_boost_orders_first(idx):
     hits = idx.search("Relay", "fts", 8)
-    assert hits[0]["target"].startswith("wiki:a.md:")   # Title-Match schlaegt Body-only
+    assert hits[0]["target"].startswith("wiki:a.md:")   # title match beats body-only
     assert len(hits) == 2
 
 
@@ -56,7 +56,7 @@ def test_rescan_picks_up_new_page(idx):
     (idx.root / "c.md").write_text("# Neu\n\nFrischer Inhalt fuer den Pass.", encoding="utf-8")
     assert idx.rescan() == 1
     hits = idx.search("Frischer Inhalt", "fts", 8)
-    assert hits and hits[0]["target"] == "wiki:c.md:L3"   # Erster Trefferzeilen-Hit = Body-Zeile
+    assert hits and hits[0]["target"] == "wiki:c.md:L3"   # first hit line = body line
 
 
 def test_deleted_page_leaves_index(idx):

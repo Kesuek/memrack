@@ -102,7 +102,7 @@ class BaseDbBackend:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA busy_timeout=3000")
             self._db.commit()
-        # vec capability probe: optional upgrade (T-007) — degrade to fts-only with a visible gap
+        # vec capability probe: optional upgrade — degrade to fts-only with a visible gap
         self._vec_ok = self._vec_probe()
         if self._vec_ok:
             try:
@@ -121,7 +121,7 @@ class BaseDbBackend:
                 _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
 
     def _fts_rebuild(self):
-        """Index-Refresh im Pass (nach jedem Write-Batch), NICHT per Trigger — SPEC §2."""
+        """Index refresh in a pass (after each write batch), NOT per trigger — SPEC §2."""
         assert self._db is not None
         self._db.execute("INSERT INTO facts_fts(facts_fts) VALUES('rebuild')")
         self._db.execute("INSERT INTO pointers_fts(pointers_fts) VALUES('rebuild')")
@@ -157,7 +157,7 @@ class BaseDbBackend:
         return {"status": "stored", "id": rowid, "target": target, "ts": now}
 
     def write_pointer(self, subject, location, kind=None):
-        """Verzeichnis-Row: WAS → WO. Auto aus Route-Log/Kuratur, nie auto aus Inhalten."""
+        """Directory row: WHAT → WHERE. Auto from route log/curation, never auto from content."""
         assert self._db is not None, "not initialized"
         subject, location = (subject or "").strip(), (location or "").strip()
         if not (subject and location):
@@ -207,7 +207,7 @@ class BaseDbBackend:
         return list(data.get("embeddings") or [])
 
     def _vec_index_missing(self, batch=32):
-        """Index-Refresh-Pass, Teil 1: facts ohne Vektor einbetten — inkrementell, batched."""
+        """Index-refresh pass, part 1: embed facts lacking a vector — incremental, batched."""
         import sqlite_vec
         rows = self._db.execute(
             "SELECT f.id, f.content FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
@@ -247,7 +247,7 @@ class BaseDbBackend:
         return hits
 
     def search(self, query, mode, k):
-        """Ranked hits per SPEC §3.2. 'fts' = facts, 'pointers' = Verzeichnis. No 'vec' yet."""
+        """Ranked hits per SPEC §3.2. 'fts' = facts, 'pointers' = directory. No 'vec' yet."""
         assert self._db is not None, "not initialized"
         if mode == "fts":
             rows, src = self._fts_query(query, k, "facts_fts",
@@ -303,12 +303,12 @@ class BaseDbBackend:
 
     @staticmethod
     def _safe_match(query, cols):
-        """fts5 MATCH builder: tokens werden QUOTED (Hyphen sind in fts5 Column-Syntax —
-        'Hit-me' liest fts5 als 'no such column: me'). Advanced-Syntax (Col:-Filter) bleibt
-        Passthrough, wenn der Query selbst einen ':' trägt."""
+        """fts5 MATCH builder: tokens get QUOTED (hyphens are fts5 column syntax —
+        fts5 reads 'Hit-me' as 'no such column: me'). Advanced syntax (col: filters)
+        stays passthrough when the query itself carries a ':'."""
         m = (query or "").strip()
         m = m.replace('"', "")
-        if ":" in m:            # advanced passthrough (subject:x) — Agent weiß, was er tut
+        if ":" in m:            # advanced passthrough (subject:x) — the agent knows what it is doing
             return m
         tokens = [t for t in re.split(r"\W+", m) if t]
         if not tokens:
@@ -318,7 +318,7 @@ class BaseDbBackend:
         return " OR ".join('"%s"' % t for t in tokens)   # OR + rank: long queries keep recall
 
     def touch(self, ids):
-        """Heat-Signal (SPEC §3.3): hits++ auf returned fact rows — Report-Basis, kein Trigger."""
+        """Heat signal (SPEC §3.3): hits++ on returned fact rows — report basis, no trigger."""
         assert self._db is not None
         ids = [i for i in ids if isinstance(i, int)]
         if not ids:
@@ -358,11 +358,11 @@ class BaseDbBackend:
         return {"status": "ignored", "reason": "unknown action %r" % action}
 
     def on_session_end(self, messages, *, session_id=""):
-        """Keine Konsolideierung hier automatisiert (Dreaming-Lektion, SPEC §4)."""
+        """No automated consolidation here (dreaming lesson, SPEC §4)."""
         return None
 
     def prefetch(self, query, *, session_id=""):
-        """Kein Search-Noise im prefetch (SPEC §3.5) — die Card kommt beim Provider."""
+        """No search noise in prefetch (SPEC §3.5) — the card arrives at the provider."""
         return ""
 
     def system_prompt_block(self):

@@ -30,13 +30,13 @@ class B:  # stand-in backend: identity matters, not behavior
 
 
 def test_tombstone_no_dead_router():
-    """route()/ROUTE_TABLE entfernet — kein zweiter Router, kein Phantom-Endpoint."""
+    """route()/ROUTE_TABLE removed — no second router, no phantom endpoint."""
     assert not hasattr(mr, "route")
     assert not hasattr(mr, "ROUTE_TABLE")
 
 
 def test_write_kinds_vocabulary_is_honest():
-    """A-3: zwei Write-kinds; episodic ist routing-only; semantic ist eine SUCH-ART."""
+    """A-3: two write kinds; episodic is routing-only; semantic is a SEARCH kind."""
     assert mr.WRITE_KINDS == ("explicit", "curated")
     assert not hasattr(mr, "SEMANTIC") and not hasattr(mr, "CURATION")
     assert not hasattr(mr, "ALL_TYPES")
@@ -63,8 +63,8 @@ def test_episodic_routes_to_wiki_only_if_enabled():
     rack = {"base-db": B("base-db"), "wiki": B("wiki")}
     prov = _prov(rack)
     assert prov._routed_for_kind("episodic") is rack["wiki"]
-    solo = _prov({"base-db": B("base-db")})   # wiki geparkt (default enabled)
-    assert solo._routed_for_kind("episodic") is None   # unstored — state.db ist kanonisch
+    solo = _prov({"base-db": B("base-db")})   # wiki parked (default enabled)
+    assert solo._routed_for_kind("episodic") is None   # unstored — state.db is canonical
 
 
 def test_explicit_and_curated_route_to_default_floor():
@@ -74,7 +74,7 @@ def test_explicit_and_curated_route_to_default_floor():
 
 
 def test_writes_go_to_exactly_one_backend():
-    """Ledger-Gesetz: KEIN fan-out-write — jede Route-Antwort ist EIN Backend."""
+    """Ledger law: NO fan-out write — every route answer is ONE backend."""
     rack = {"base-db": B("base-db"), "wiki": B("wiki")}
     prov = _prov(rack)
     for kind in ("explicit", "curated"):
@@ -83,7 +83,7 @@ def test_writes_go_to_exactly_one_backend():
 
 
 def test_single_backend_rule_takes_the_lone_one():
-    """Basisfall-Regel: rack len==1 → dorthin, egal wie es heist; falsch-forced fällt zurück."""
+    """Basisfall rule: rack len==1 → there, whatever it is called; bad-forced falls back."""
     prov = _prov({"solo": B("solo")})
     assert prov._pick_default_target() == "solo"
     prov2 = _prov({"base-db": B("base-db")}, forced="nosuch")
@@ -91,15 +91,15 @@ def test_single_backend_rule_takes_the_lone_one():
 
 
 def test_card_block_overflows_honestly():
-    """A-2: kein stiller Cut — Overflow-Zeile nennt Zahl und memrack_status."""
+    """A-2: no silent cut — the overflow line names the count and memrack_status."""
     prov = mr._MemrackBase()
     prov._rack = {n: B(n) for n in [f"be{i:02d}" for i in range(10)]}
     prov._cards = {n: {"best_for": "x", "limits": "", "modes": ["fts"], "write": True,
                        "search": True, "built_in": False, "origin": "code"} for n in prov._rack}
     block = prov._card_block()
-    assert "+2 weitere Backends — memrack_status" in block
+    assert "+2 more backends — memrack_status" in block
     prov6 = mr._MemrackBase()
     prov6._rack = {n: B(n) for n in [f"b{i}" for i in range(6)]}
     prov6._cards = {n: {"best_for": "x", "limits": "", "modes": ["fts"], "write": True,
                         "search": True, "built_in": False, "origin": "code"} for n in prov6._rack}
-    assert "weitere Backends" not in prov6._card_block()
+    assert "more backends" not in prov6._card_block()

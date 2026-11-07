@@ -65,7 +65,7 @@ def test_episodic_hit_references_turn_with_iso_ts(eng):
 
 
 def test_read_only_connect_rejects_write(eng):
-    # die ro-surface beweist sich: ein write-Versuch über die Verbindung scheitert
+    # the ro-surface proves itself: a write attempt over the connection fails
     with pytest.raises(sqlite3.OperationalError):
         eng._db.execute("INSERT INTO messages(session_id, role, content, timestamp, active)"
                         " VALUES('x','u','y',0,1)")
@@ -78,7 +78,7 @@ def test_unknown_mode_raises(eng):
 
 
 def test_hyphen_query_survives(eng):
-    hits = eng.search("IOWAP-Relay", "episodic", 8)   # der hyphen-trap-Schutz
+    hits = eng.search("IOWAP-Relay", "episodic", 8)   # the hyphen-trap guard
     assert len(hits) == 2
 
 
@@ -89,7 +89,7 @@ def test_no_state_db_is_honest_init_failure(tmp_path):
 
 
 def test_rack_includes_it_by_default(tmp_path):
-    """T-023: die Session-Historie wird AUTOMATISCH mit durchsucht —
-    default-enabled, kein extra-Config nötig."""
+    """the session history is searched AUTOMATICALLY as well —
+    default-enabled, no extra config needed."""
     assert "state-episodic" in mr._DEFAULT_ENABLED
     assert "episodic" in mr._SEARCH_MODES

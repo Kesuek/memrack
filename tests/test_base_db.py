@@ -80,7 +80,7 @@ def test_card_fields_present():
     e = base_db.BaseDbBackend()
     assert e.name == "base-db"
     assert "fts" in e.search_modes and "pointers" in e.search_modes
-    assert "vec" not in e.search_modes          # Basis-Dep: kein vec (SPEC §1.4)
+    assert "vec" not in e.search_modes          # base dep: no vec (SPEC §1.4)
     assert e.best_for and e.limits and e.writeable
 
 

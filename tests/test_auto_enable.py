@@ -1,4 +1,4 @@
-"""T-025: auto-provision at activation — base-db + wiki can be auto-enabled when the
+"""auto-provision at activation — base-db + wiki can be auto-enabled when the
 provider activates. Default OFF (nothing gets enabled without an explicit toggle).
 The Basisfall stays intact: with the key absent/false the default rack is exactly
 (base-db, state-episodic). state-episodic is untouched by the toggle (read-only,

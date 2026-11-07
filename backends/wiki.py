@@ -21,7 +21,7 @@ _TOKEN = re.compile(r"[\w\-\.\:/]+", re.UNICODE)
 
 
 def _utcnow_iso():
-    """UTC, Mikrosekunden, Z-Suffix — die ts-Norm des Merges (A-5)."""
+    """UTC, microseconds, Z-suffix — the ts norm of the merge (A-5)."""
     import datetime as _dt
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
@@ -33,9 +33,9 @@ class WikiIndex:
         self._root = Path(str(root or (Path.home() / "wiki" / "main")))
         self._session_id = session_id
         self._index: dict = {}   # rel_path -> (mtime, text)
-        self._lock = threading.RLock()   # REENTRANT: search() hält ihn und ruft rescan()
+        self._lock = threading.RLock()   # REENTRANT: search() holds it and calls rescan()
         self._started = False
-        self.rescan()   # Index-Aufbau einmal pro Start (Session-Start-Pass, SPEC T-007)
+        self.rescan()   # index built once per start (session-start pass)
         self._started = True
 
     @property
@@ -88,7 +88,7 @@ class WikiIndex:
             score, first_line = 0.0, None
             for tok in tokens:
                 if not any(tok in l for l in body):
-                    score = -1.0   # AND-Semantik: ein fehlendes Token killt die Seite
+                    score = -1.0   # AND semantics: one missing token kills the page
                     break
                 score += 3.0 if tok in title else 0.0
                 score += 1.0 * sum(1 for l in body if tok in l)
@@ -154,7 +154,7 @@ class WikiBackend:
         if self._prov:
             self._prov.on_session_end(messages)
         if self._engine:
-            self._engine.rescan()   # Index-Refresh-Pass (T-007)
+            self._engine.rescan()   # index-refresh pass
 
     def on_turn(self, user, assistant, *, session_id=""):
         if self._prov:

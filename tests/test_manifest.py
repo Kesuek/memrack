@@ -1,4 +1,4 @@
-"""T-003: bridge-pattern manifest docking — 5 case classes + pending-dock rescan."""
+"""bridge-pattern manifest docking — 5 case classes + pending-dock rescan."""
 import importlib.util
 import pathlib
 import sys
@@ -102,10 +102,10 @@ def test_structural_lie_is_a_registry_error(tmp_path):
 
 def test_status_shows_pending_dock_as_next_session(tmp_path):
     prov = mr._MemrackBase()
-    prov.initialize(session_id="S1", hermes_home=str(tmp_path))   # nichts gedockt
+    prov.initialize(session_id="S1", hermes_home=str(tmp_path))   # nothing docked
     (tmp_path / "plugins" / "memrack" / "backends.d").mkdir(parents=True, exist_ok=True)
     (tmp_path / "plugins" / "memrack" / "backends.d" / "db-copy.yaml").write_text(
-        "name: db-copy\nmodule: nope.py\n", encoding="utf-8")   # fs only, kein import
+        "name: db-copy\nmodule: nope.py\n", encoding="utf-8")   # fs only, no import
     pend = prov.status()["pending_docks"]
     assert len(pend) == 1
     assert pend[0]["note"] == "registered (next session)"

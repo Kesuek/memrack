@@ -55,18 +55,18 @@ class StateEpisodicBackend:
                                        check_same_thread=False, timeout=5.0)
         except sqlite3.Error as e:
             raise RuntimeError(f"state.db read-only attach failed: {e}") from e
-        # Schema-Verifikation: ohne die FTS-Tabelle \u00e4lterer Hermes = ehrlich kein episodic-Wert
+        # schema verification: without the FTS table (older Hermes) = honestly no episodic value
         try:
             self._db.execute("SELECT rowid FROM messages_fts LIMIT 1").fetchone()
         except sqlite3.OperationalError as e:
             self._db.close(); self._db = None  # release, ro-mode touched nothing
-            raise RuntimeError(f"messages_fts fehlt (altes state.db): {e}") from e
+            raise RuntimeError(f"messages_fts missing (older state.db): {e}") from e
         _LOG.info("state-episodic attached (READ-ONLY): %s", self._path)
 
     # ── search engine ──
     def search(self, query, mode, k, session_id=""):
-        """episodic-hits: fts5-MATCH \u00fcber content/tool_name je Token QUOTED (hyphen-trap),
-        JOIN sessions zum Titel + roll (der = die = die = die = =) \u2014 ts via ISO-Norm."""
+        """episodic hits: fts5 MATCH over content/tool_name, each token QUOTED (hyphen trap),
+        JOIN sessions for title + rank — ts via ISO norm."""
         assert self._db is not None, "not initialized"
         if mode != "episodic":
             raise ValueError("state-episodic carries mode 'episodic' only (got %r)" % mode)
@@ -82,8 +82,8 @@ class StateEpisodicBackend:
         with self._locked:
             rows = self._db.execute(sql, (quoted, k)).fetchall()
         return [{"backend": self.name, "kind": "episodic", "rank": i + 1,
-                 "content": ("%s: %s" % (r[2], r[4]))[:320],        # role + die Trefferzeile
-                 "target": "session:%s#%d" % (r[1], r[0]),           # REFERENCE: das state.db hält den Turn
+                 "content": ("%s: %s" % (r[2], r[4]))[:320],        # role + hit line
+                 "target": "session:%s#%d" % (r[1], r[0]),           # REFERENCE: the state.db holds the turn
                  "ts": _iso_from_epoch(r[3]),
                  "snippet": r[4]}
                 for i, r in enumerate(rows)]
