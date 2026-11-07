@@ -1,6 +1,6 @@
 """COMPLETENESS (S-1/B-3): the Basisfall is PROVEN, not claimed.
 
-Stage ladder from SPEC §1.4 — each stage as its own test, each with a real provable
+Stage ladder from the degradation law — each stage as its own test, each with a real provable
 edge. A fresh HERMES_HOME with ONLY base-db must carry everything.
 """
 import importlib.util
@@ -47,7 +47,7 @@ def test_stage0_basisfall_solo(tmp_path):
 
 
 def test_stage1_docked_backend_broken_is_gap_not_death(tmp_path):
-    """SPEC §1.4: a broken docked module = gap entry; THE REST keeps running."""
+    """the degradation law: a broken docked module = gap entry; THE REST keeps running."""
     (tmp_path / "plugins" / "memrack" / "backends.d").mkdir(parents=True, exist_ok=True)
     (tmp_path / "plugins" / "memrack" / "backends.d" / "broken.py").write_text(
         "raise RuntimeError('kaputt beim Import')\n", encoding="utf-8")
@@ -89,7 +89,7 @@ def test_stage1b_init_failure_in_docked_backend(tmp_path):
 
 
 def test_stage2_vec_off_is_card_note_not_error(tmp_path):
-    """SPEC §1.4+§3: vec without engine → card without 'vec', fts runs, vec request = honest error."""
+    """the degradation and honest-error laws: vec without engine → card without 'vec', fts runs, vec request = honest error."""
     prov = mr._MemrackBase(config={"embedding_model": "model-gibt-es-nicht"})
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     st = json.loads(prov.handle_tool_call("memrack_status", {}))
@@ -104,7 +104,7 @@ def test_stage2_vec_off_is_card_note_not_error(tmp_path):
 
 
 def test_stage3_readonly_home_fails_closed(tmp_path):
-    """SPEC §1.4 (pinned): read-only plugin-data → init fails honestly →
+    """the degradation law (pinned): read-only plugin-data → init fails honestly →
     framework-level fallback to the builtin. No half-dead provider."""
     # simulate the unusable path: a chmod owner-lock would roll back the engine's own
     # 0700 — hence the path is created as a FILE (mkdir/open fails hard)
@@ -117,7 +117,7 @@ def test_stage3_readonly_home_fails_closed(tmp_path):
 
 
 def test_rrf_tiebreak_heat_then_freshness(tmp_path):
-    """S-2: equal score → heat DESC → ts DESC. Deterministic order per SPEC §3.3."""
+    """S-2: equal score → heat DESC → ts DESC. Deterministic order per the fusion law."""
     a = {"backend": "x", "kind": "fact", "target": "a", "content": "a", "rank": 1, "hits": 0, "ts": "2026-01-01"}
     b = {"backend": "x", "kind": "fact", "target": "b", "content": "b", "rank": 1, "hits": 3, "ts": "2026-12-01"}
     c = {"backend": "x", "kind": "fact", "target": "c", "content": "c", "rank": 1, "hits": 0, "ts": "2026-11-06"}

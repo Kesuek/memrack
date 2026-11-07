@@ -4,7 +4,7 @@ v0.1: route-all target, behavior like running wiki-memory directly (needs the
 Hermes runtime: imports plugins.memory).
 v0.3: `WikiIndex` (stdlib-only, NO runtime dependency) in-memory page index so
 memrack_search('fts') hits wiki PAGES too — kind=page, target
-wiki:<relpath>:L<n>, snippet (SPEC §3.2); mtime-diff refresh pass on session
+wiki:<relpath>:L<n>, snippet (the retrieval tools.2); mtime-diff refresh pass on session
 end (no per-write work).
 
 Tests import WikiIndex directly — the wrapper's Hermes dependency stays quarantined.
@@ -70,7 +70,7 @@ class WikiIndex:
         return changed
 
     def search(self, query, mode, k, session_id=""):
-        """Page hits per SPEC §3.2: rank 1..k, AND-semantics over tokens, title boost."""
+        """Page hits per the retrieval tools.2: rank 1..k, AND-semantics over tokens, title boost."""
         if mode != "fts":
             raise ValueError("wiki engine carries mode 'fts' only (got %r)" % mode)
         with self._lock:

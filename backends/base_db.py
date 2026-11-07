@@ -2,7 +2,7 @@
 
 SQLite-only store (facts + pointers + FTS5), zero external dependencies:
 no vector engine, no network, no wiki requirement. Works solo — one backend
-is the whole rack (Basisfall, SPEC §1.4). The schema is intentional as-is;
+is the whole rack (Basisfall, the degradation law). The schema is intentional as-is;
 see docs/schema-base-db.md.
 
 Card (code-first built-in; docked backends carry theirs in the manifest):
@@ -121,7 +121,7 @@ class BaseDbBackend:
                 _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
 
     def _fts_rebuild(self):
-        """Index refresh in a pass (after each write batch), NOT per trigger — SPEC §2."""
+        """Index refresh in a pass (after each write batch), NOT per trigger — the episodic law."""
         assert self._db is not None
         self._db.execute("INSERT INTO facts_fts(facts_fts) VALUES('rebuild')")
         self._db.execute("INSERT INTO pointers_fts(pointers_fts) VALUES('rebuild')")
@@ -171,7 +171,7 @@ class BaseDbBackend:
             self._db.commit()
 
 
-    # ── vec engine (optional upgrade; SPEC §1.4 degradation ladder) ──
+    # ── vec engine (optional upgrade; the degradation law degradation ladder) ──
     def card_modes(self):
         """DYNAMIC modes: the card the provider shows reflects the environment honestly."""
         return ("fts", "pointers") + (("vec",) if self._vec_ok else ())
@@ -247,7 +247,7 @@ class BaseDbBackend:
         return hits
 
     def search(self, query, mode, k):
-        """Ranked hits per SPEC §3.2. 'fts' = facts, 'pointers' = directory. No 'vec' yet."""
+        """Ranked hits per the retrieval tools.2. 'fts' = facts, 'pointers' = directory. No 'vec' yet."""
         assert self._db is not None, "not initialized"
         if mode == "fts":
             rows, src = self._fts_query(query, k, "facts_fts",
@@ -318,7 +318,7 @@ class BaseDbBackend:
         return " OR ".join('"%s"' % t for t in tokens)   # OR + rank: long queries keep recall
 
     def touch(self, ids):
-        """Heat signal (SPEC §3.3): hits++ on returned fact rows — report basis, no trigger."""
+        """Heat signal (the fusion law): hits++ on returned fact rows — report basis, no trigger."""
         assert self._db is not None
         ids = [i for i in ids if isinstance(i, int)]
         if not ids:
@@ -330,7 +330,7 @@ class BaseDbBackend:
 
     # ── provider hooks ──
     def on_turn(self, user, assistant, *, session_id=""):
-        """Turns are NOT copied into facts (episodic lives in Hermes' state.db — SPEC §2)."""
+        """Turns are NOT copied into facts (episodic lives in Hermes' state.db — the episodic law)."""
         return None
 
     def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
@@ -358,11 +358,11 @@ class BaseDbBackend:
         return {"status": "ignored", "reason": "unknown action %r" % action}
 
     def on_session_end(self, messages, *, session_id=""):
-        """No automated consolidation here (dreaming lesson, SPEC §4)."""
+        """No automated consolidation here (the dreaming lesson is the project law)."""
         return None
 
     def prefetch(self, query, *, session_id=""):
-        """No search noise in prefetch (SPEC §3.5) — the card arrives at the provider."""
+        """No search noise in prefetch (the prefetch law) — the card arrives at the provider."""
         return ""
 
     def system_prompt_block(self):

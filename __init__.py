@@ -1,6 +1,6 @@
 """memrack — memory provider with a pluggable backend rack.
 
-One provider slot; the rack hosts many backends. v0.2 semantics (SPEC):
+One provider slot; the rack hosts many backends. v0.2 semantics:
 the AGENT routes — every backend advertises a card (best_for / limits /
 search); `memrack_write` takes the agent's backend choice, `memrack_search`
 fans out and merges. Fallback rules are deterministic by SOURCE (tool, not
@@ -34,7 +34,7 @@ CURATED = "curated"     # facts imported from curation (memrack import / kuratur
 EPISODIC = "episodic"   # routing-only kind: turns live in Hermes state.db, never copied
 WRITE_KINDS = (EXPLICIT, CURATED)   # what memrack_write accepts
 
-DEFAULT_BACKEND = "base-db"   # the stdlib floor (SPEC §1.4) — solo-functional
+DEFAULT_BACKEND = "base-db"   # the stdlib floor (the degradation law) — solo-functional
 # state-episodic default-ON (read-only over the state.db — memory queries
 # search the session history automatically; the state.db stays canonical/ro —
 # no copy, no trigger)
@@ -142,7 +142,7 @@ def _load_manifest(path: Path):
     if backend.name != man["name"]:
         raise TypeError("manifest %r names backend %r but code says %r"
                         % (path.name, man["name"], backend.name))
-    backend.manifest = man  # the card is DATA (SPEC §1.3) — attached, verified against code
+    backend.manifest = man  # the card is DATA (the docking law) — attached, verified against code
     modes = man.get("search") or ()
     if modes and not callable(getattr(backend, "search", None)):
         raise TypeError("manifest %s claims search=%r but the code ships no search method"
@@ -527,7 +527,7 @@ class _MemrackBase:
         return "\n\n".join(parts)
 
     def _card_block(self) -> str:
-        """The rack card (SPEC §1.1): one line per backend, tiny, informs the agent's choices."""
+        """The rack card (the routing-law surface): one line per backend, informs the agent's choices."""
         if not self._rack:
             return ""
         lines = ["memrack rack (v%s): pick write destinations deliberately in memrack_write;" % __version__]
@@ -563,7 +563,7 @@ class _MemrackBase:
                 paths.append(str(path))
         return paths
 
-    # ── tools: search / write / status (SPEC §3, §1.2) ──
+    # ── tools: search / write / status (the retrieval tools, §1.2) ──
     @staticmethod
     def _status_tool_name():
         return "memrack_status"
@@ -634,7 +634,7 @@ class _MemrackBase:
                 return fn(tool_name, args, **kwargs)
         raise KeyError("unknown memrack tool %r" % tool_name)
 
-    # ── search: fan-out + ONE fusion rule (SPEC §3.2/§3.3) ──
+    # ── search: fan-out + ONE fusion rule (the fusion law) ──
     def _tool_search(self, args):
         started = time.time()
         query = str(args.get("query") or "").strip()
@@ -663,7 +663,7 @@ class _MemrackBase:
         runs, engine_errors = [], []
         carried = sorted({m for b in chosen for m in self._cards[b.name]["modes"]})
         if mode != "all" and mode not in carried:
-            # SPEC §1.4 Degradation: a specifically requested mode that NO backend
+            # the degradation law Degradation: a specifically requested mode that NO backend
             # in the rack carries is an honest error — never a silent zero-result.
             return json.dumps({
                 "error": "no backend carries mode %r" % mode,
@@ -705,7 +705,7 @@ class _MemrackBase:
 
     @staticmethod
     def _rrf_merge(runs, limit):
-        """RRF 60 + collapse per target + deterministic tiebreak — SPEC §3.3."""
+        """RRF 60 + collapse per target + deterministic tiebreak — the fusion law."""
         pool: dict = {}
         for hits in runs:
             for hit in hits:
@@ -796,7 +796,7 @@ class _MemrackBase:
         report["backend"] = backend.name
         return json.dumps(report, indent=2, ensure_ascii=False)
 
-    # ── write: agent chooses the backend (SPEC §1.1/§1.2) ──
+    # ── write: agent chooses the backend (the routing law) ──
     def _tool_write(self, args):
         content = str(args.get("content") or "").strip()
         kind = args.get("kind") or EXPLICIT
@@ -835,7 +835,7 @@ class _MemrackBase:
 
     def _rescan_dock(self) -> list:
         """Cheap fs-only rescan: manifests on disk that this session's rack has not loaded —
-        they live 'registered (next session)' (bridge-watch spirit, SPEC §1.3)."""
+        they live 'registered (next session)' (bridge-watch spirit, the docking law)."""
         dock = docked_dir(self._hermes_home)
         if not (dock and dock.is_dir()):
             return []

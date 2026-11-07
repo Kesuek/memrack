@@ -1,6 +1,6 @@
 """Built-in "state-episodic" backend — READ-ONLY search engine over the session history.
 
-The state.db stays CANONICAL and UNTOUCHED (SPEC law: episodic lives in Hermes
+The state.db stays CANONICAL and UNTOUCHED (project law: episodic lives in Hermes
 state.db — turns are never copied). This backend opens it SQLITE READ-ONLY
 (`mode=ro` — no writes, no triggers, no WAL pokes of its own) and exposes the
 'episodic' search mode so memrack_search fan-out covers past conversations

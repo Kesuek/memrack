@@ -106,7 +106,7 @@ def test_provider_forced_backend_delegates_and_logs(tmp_path):
     assert prov.prefetch("wer") == "FAKE-HIT: wer"
     spb = prov.system_prompt_block()
     assert spb.startswith("FAKE-SPB")                       # wrapped provider block first
-    assert "memrack rack (v" in spb and "- base-db:" in spb # rack card appended (SPEC §1.1)
+    assert "memrack rack (v" in spb and "- base-db:" in spb # rack card appended (the routing-law surface)
     assert "- fake:" in spb
 
     log = tmp_path / "plugin-data" / "memrack" / "route_log.jsonl"
@@ -142,13 +142,13 @@ def test_basisfall_solo_base_db_fresh_home(tmp_path):
 
 
 def test_search_targeted_backend_and_mode_errors(tmp_path):
-    """SPEC §3.1 validation: no silent zero results — errors name available modes."""
+    """the honest-errors law validation: no silent zero results — errors name available modes."""
     prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     # unknown backend → error with inventory
     out = prov.handle_tool_call("memrack_search", {"query": "x", "backend": "nosuch"})
     assert '"error"' in out and "registered:" in out
-    # base-db carries NO vec → explicit error naming available modes (SPEC §1.4)
+    # base-db carries NO vec → explicit error naming available modes (the degradation law)
     out = prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"})
     assert '"error"' in out and "no backend carries mode 'vec'" in out
     assert "fts, pointers" in out   # available modes by name
@@ -194,4 +194,4 @@ def test_backup_paths_declares_route_log(tmp_path):
     prov = mr._MemrackBase(config={"backend": "fake"})
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     ends = [p.rsplit("/", 1)[-1] for p in prov.backup_paths()]
-    assert "route_log.jsonl" in ends and "memrack.db" in ends  # log + Store (SPEC §1.4)
+    assert "route_log.jsonl" in ends and "memrack.db" in ends  # log + Store (the degradation law)

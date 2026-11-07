@@ -34,7 +34,7 @@ def _ollama_ok():
 
 
 pytestmark = pytest.mark.skipif(not SQLITE_VEC or not _ollama_ok(),
-                                reason="env has no sqlite-vec or nomic — vec is OPTIONAL (SPEC 1.4)")
+                                reason="env has no sqlite-vec or nomic — vec is OPTIONAL (the degradation law)")
 
 
 def _engine(tmp_path):

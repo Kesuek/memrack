@@ -1,4 +1,4 @@
-"""Unit tests: built-in base-db engine (stdlib floor, SPEC §2/§1.4)."""
+"""Unit tests: built-in base-db engine (stdlib floor, the episodic and degradation laws)."""
 import importlib.util
 import pathlib
 import sys
@@ -80,10 +80,10 @@ def test_card_fields_present():
     e = base_db.BaseDbBackend()
     assert e.name == "base-db"
     assert "fts" in e.search_modes and "pointers" in e.search_modes
-    assert "vec" not in e.search_modes          # base dep: no vec (SPEC §1.4)
+    assert "vec" not in e.search_modes          # base dep: no vec (the degradation law)
     assert e.best_for and e.limits and e.writeable
 
 
 def test_turns_are_never_copied(eng):
     eng.on_turn("user says hi", "assistant answers", session_id="S1")
-    assert eng.search("user says hi", "fts", 8) == []   # episodic stays in state.db (SPEC §2)
+    assert eng.search("user says hi", "fts", 8) == []   # episodic stays in state.db (the episodic law)
