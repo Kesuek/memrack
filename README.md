@@ -30,7 +30,14 @@ have.
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.4.x (86 tests green; SDK, state-episodic, provider CLI, desktop config surface)
+## Status — v0.4.x (86 tests green)
+
+**Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
+at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
+over the canonical session history, default on — it copies nothing).
+
+Docs live in [`docs/`](docs/): backend-guide (write a backend in 15 minutes),
+plus per-backend schema references.
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
 - [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
@@ -48,7 +55,7 @@ have.
 - [x] backend SDK (T-015): `memrack.sdk.MemrackBackend` base (fts5/lock/degrade lessons
       pre-built, OPTIONAL — duck-typing remains the law), `memrack.conformance`
       (`check_backend`/`assert_conformance` + standalone runner), `backends/_template.py`
-      + `BACKEND_GUIDE.md` — target: foreign backend 0→docked in <15 min
+      + `docs/backend-guide.md` — target: foreign backend 0→docked in <15 min
 - [x] state-episodic backend (T-023): READ-ONLY search over the canonical session
       history (`state.db`, mode=ro, no copies, no triggers), default ON
 - [x] provider CLI (T-012): `hermes memrack status|report|export|import` — the heat

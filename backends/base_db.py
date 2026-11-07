@@ -2,13 +2,13 @@
 
 SQLite-only store (facts + pointers + FTS5), zero external dependencies:
 no vector engine, no network, no wiki requirement. Works solo — one backend
-is the whole rack (Basisfall, SPEC §1.4). The vec upgrade (T-007) slots in
-without touching this contract.
+is the whole rack (Basisfall, SPEC §1.4). The schema is intentional as-is;
+see docs/schema-base-db.md.
 
 Card (code-first built-in; docked backends carry theirs in the manifest):
     name:    base-db
     best_for: atomic facts + mirror of memory-writes; exact recall, milliseconds
-limits:  ONE sentence per row, no prose; no vec
+limits:  ONE sentence per row, no prose
     search:  fts, pointers
 """
 
@@ -67,7 +67,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[768]);
 class BaseDbBackend:
     name = PLUGIN_NAME
     best_for = "atomic facts + mirror of memory-writes; exact recall in milliseconds"
-    limits = "ONE sentence per row on write; import allows multi-sentence legacy rows (tags import:); vec only when sqlite-vec+ollama are available"
+    limits = "ONE sentence per row on write; import allows multi-sentence legacy rows (tags import:)"
     search_modes = ("fts", "pointers")   # STATIC floor; card_modes() reports the DYNAMIC set
     writeable = True
     write_types = ("explicit", "episodic", "semantic", "curation")  # accepts everything routed at it
