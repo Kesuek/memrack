@@ -72,6 +72,10 @@ def test_norm_backends_empty_and_none_fall_to_default():
 def test_initialize_accepts_comma_string(tmp_path):
     """The wizard writes ONE string — initialize must rack base-db AND state-episodic."""
     prov = mr._MemrackBase(config={"enabled_backends": "base-db, state-episodic"})
+    import sqlite3 as _sqlite3
+    _c = _sqlite3.connect(str(tmp_path / "state.db"))
+    _c.executescript("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, timestamp INTEGER, active INTEGER DEFAULT 1, content TEXT, tool_name TEXT, tool_args TEXT); CREATE VIRTUAL TABLE messages_fts USING fts5(content, tool_name, content='messages', content_rowid='id');")
+    _c.commit(); _c.close()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     st = json.loads(prov.handle_tool_call("memrack_status", {}))
     assert "state-episodic" in st["cards"]

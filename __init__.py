@@ -640,7 +640,12 @@ class _MemrackBase:
         query = str(args.get("query") or "").strip()
         mode = args.get("mode") or "all"
         backend_wish = args.get("backend") or None
-        limit = max(1, min(int(args.get("limit") or self._config.get("search_top_k") or 8), 32))
+        try:
+            limit = int(args.get("limit") or self._config.get("search_top_k") or 8)
+        except (ValueError, TypeError):
+            return json.dumps({"error": "limit must be an integer (1-32)",
+                               "hint": "omitting it uses search_top_k from the config"}, ensure_ascii=False)
+        limit = max(1, min(limit, 32))
         if not query:
             return json.dumps({"error": "query required",
                                "hint": "What are you looking for? One keyword is enough, e.g. 'Relay Port'"},

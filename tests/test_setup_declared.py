@@ -134,6 +134,10 @@ def test_initialize_racks_from_flat_json_alone(tmp_path):
         json.dumps({"enabled_backends": "base-db,state-episodic"}),
         encoding="utf-8")
     prov = mr._MemrackBase()
+    import sqlite3 as _sqlite3
+    _c = _sqlite3.connect(str(tmp_path / "state.db"))
+    _c.executescript("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, timestamp INTEGER, active INTEGER DEFAULT 1, content TEXT, tool_name TEXT, tool_args TEXT); CREATE VIRTUAL TABLE messages_fts USING fts5(content, tool_name, content='messages', content_rowid='id');")
+    _c.commit(); _c.close()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     st = json.loads(prov.handle_tool_call("memrack_status", {}))
     assert "state-episodic" in st["cards"]

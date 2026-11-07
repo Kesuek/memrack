@@ -36,8 +36,7 @@ have.
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
 over the canonical session history, default on — it copies nothing).
 
-Docs live in [`docs/`](docs/): backend-guide (write a backend in 15 minutes),
-plus per-backend schema references.
+Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.md`](docs/backend-guide.md) (15-min backend), [`docs/schema-base-db.md`](docs/schema-base-db.md), [`docs/schema-wiki.md`](docs/schema-wiki.md).
 
 - [x] Provider skeleton (MemoryProvider-ABC compatible, single-slot compliant)
 - [x] Built-in `base-db` backend: SQLite `facts` + `pointers` + FTS5 — stdlib-only,
