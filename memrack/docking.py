@@ -389,7 +389,6 @@ def _probe(provider_name, *, loader=None, hermes_home=None):
     available = _available_of(provider)
 
     mirror_list = []
-    error = ""
     if tools:
         chain = _namechain()
         tool_names = [name for name, _ in tools]
