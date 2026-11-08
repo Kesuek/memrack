@@ -106,6 +106,13 @@ engine), never a write kind. The AGENT chooses the destination per write
 (`backend=?` in `memrack_write`); kinds only drive the deterministic fallback.
 A write goes to exactly ONE backend — no fan-out writes.
 
+Provider hooks (`prefetch`, `system_prompt_block`, `on_session_end`,
+`on_pre_compress`, `on_session_switch`) DO fan out to every active backend
+(decision (a), T-031): a backend without the hook is silently skipped, one
+engine's failure stays isolated (warn log; per-backend `engine_errors` inside
+the packed multi-result dict), prompt blocks merge non-empty + dedupe with
+blank-line joins, and a single result keeps the exact pre-fanout form.
+
 ## Design principles
 
 1. **No autonomous LLM routing at write time.** An earlier experiment with

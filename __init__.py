@@ -516,18 +516,60 @@ class _MemrackBase:
         self._log_route("memory_write:%s" % action, str(target), backend.name)
         return out
 
-    def on_session_end(self, messages=None, **kwargs):
-        if self._active is None:
+    # ── provider hooks (T-031, decision (a): fan-out over the whole rack) ──
+    def _hook_fanout(self, hook, *args, **kwargs):
+        """Fan a provider hook out to EVERY rack backend: one engine's failure
+        never kills the rest (the search fan-out law — per-backend try/except,
+        errors isolated and logged). A backend without the hook is a silent
+        skip (the optional-hook contract, no warn spam)."""
+        results, engine_errors = [], []
+        for backend in (getattr(self, "_rack", None) or {}).values():
+            fn = getattr(backend, hook, None)
+            if not callable(fn):
+                continue
+            try:
+                results.append((backend.name, fn(*args, **kwargs)))
+            except Exception as exc:
+                engine_errors.append({"backend": backend.name,
+                                      "error": "%s: %s" % (type(exc).__name__, exc)})
+                _LOG.warning("memrack backend %s hook %s failed: %s",
+                             backend.name, hook, exc)
+        return results, engine_errors
+
+    @staticmethod
+    def _pack_fanout(results, engine_errors):
+        """Aggregation for the dict-shaped hooks: None answers are the no-op
+        receipt, not an Ergebnis; >1 real result → {"backend": result}
+        (engine_errors ride along, the search-fanout shape); exactly one real
+        result keeps the pre-fanout form (no breaking — even when a SIBLING
+        engine erred, that error is isolated + logged); none → the old None."""
+        real = [(name, out) for name, out in results if out is not None]
+        if not real:
             return None
-        out = self._active.on_session_end(messages, session_id=self._session_id)
-        self._log_route("session_end", "delegation to %s" % self._active.name, self._active.name)
-        return out
+        if len(real) == 1:
+            return real[0][1]
+        packed = dict(real)
+        if engine_errors:
+            packed["engine_errors"] = engine_errors
+        return packed
+
+    def on_session_end(self, messages=None, **kwargs):
+        results, engine_errors = self._hook_fanout(
+            "on_session_end", messages, session_id=self._session_id)
+        reached = [name for name, _ in results] + [e["backend"] for e in engine_errors]
+        if reached:
+            self._log_route("session_end", "fan-out", ", ".join(sorted(reached)))
+        return self._pack_fanout(results, engine_errors)
 
     def on_session_switch(self, new_session_id=None, **kwargs):
-        return self._forward("on_session_switch", new_session_id, **kwargs)
+        results, engine_errors = self._hook_fanout(
+            "on_session_switch", new_session_id, **kwargs)
+        return self._pack_fanout(results, engine_errors)
 
     def on_pre_compress(self, messages=None, **kwargs):
-        return self._forward("on_pre_compress", messages, **kwargs)
+        results, engine_errors = self._hook_fanout(
+            "on_pre_compress", messages, **kwargs)
+        return self._pack_fanout(results, engine_errors)
 
     def on_delegation(self, task=None, result=None, **kwargs):
         return self._forward("on_delegation", **kwargs)
@@ -546,16 +588,27 @@ class _MemrackBase:
         return fn(*args, **kwargs)
 
     def prefetch(self, query, *, session_id=""):
-        if self._active is None:
-            return ""
-        return self._active.prefetch(query, session_id=session_id or self._session_id) or ""
+        results, engine_errors = self._hook_fanout(
+            "prefetch", query, session_id=session_id or self._session_id)
+        # the str contract has no error slot — errors stay isolated + logged above
+        parts = []
+        for _name, out in results:
+            if not out:
+                continue
+            if isinstance(out, (list, tuple)):
+                parts.extend(str(p) for p in out if p)  # a list return flattens into the merge
+            else:
+                parts.append(out)
+        return "\n\n".join(parts)
 
     def system_prompt_block(self) -> str:
-        parts = []
-        if self._active is not None:
-            base = self._active.system_prompt_block() or ""
-            if base:
-                parts.append(base)
+        results, engine_errors = self._hook_fanout("system_prompt_block")
+        parts, seen = [], set()
+        for _name, out in results:
+            block = str(out or "").strip()
+            if block and block not in seen:     # only non-empty blocks, dedupe
+                seen.add(block)
+                parts.append(block)
         card_lines = self._card_block()
         if card_lines:
             parts.append(card_lines)
