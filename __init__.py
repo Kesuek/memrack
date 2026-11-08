@@ -603,6 +603,37 @@ class _MemrackBase:
                          type(exc).__name__, exc)
         return folded
 
+    def _fold_persisted_membership_toggles(self):
+        """T-037 acting law — the DECLARED surface's raw toggle keys act per
+        /new. The desktop's flat writer has no provider-side fold: a gear
+        pane toggle lands as a RAW ``<name>_in_rack`` key in the flat store.
+        Here (before the rack discovery) the EXISTING T-036 fold runs over
+        the persisted keys against the CURRENT live stand — built-in names
+        fold into ``enabled_backends`` (dedupe, floor absorbed, wiki parked
+        by default), docked names park/restore their CARD FILE (presence is
+        the state; the key leaves the live config). The fold READS the
+        stores and this consumption point never WRITES them (no hidden
+        churn: the same persisted keys fold to the same stand on every
+        initialize; any later provider save re-echoes the folded stand
+        through the save path's laws). A fold failure is a warning — the
+        initialize keeps its raw keys and racks on (the Basisfall duty)."""
+        persisted = {k: v for k, v in self._config.items()
+                     if isinstance(k, str) and k.endswith("_in_rack")}
+        if not persisted:
+            return None            # nothing to fold — no store read, no writes
+        try:
+            folded = self._fold_membership_toggles(dict(persisted),
+                                                   self._hermes_home)
+        except Exception as exc:
+            _LOG.warning("memrack persisted toggle fold skipped (%s: %s)",
+                         type(exc).__name__, exc)
+            return None
+        for key in persisted:
+            if key not in folded:  # docked members: presence is the state
+                self._config.pop(key, None)
+        self._config.update(folded)   # the folded stand + the echoed keys
+        return folded
+
     def initialize(self, session_id="", **kwargs):
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
@@ -613,6 +644,12 @@ class _MemrackBase:
         self._gaps = []
         self._force = False
         self._dock_want_outcome = None
+
+        # T-037 acting law — the declared gear pane's persisted raw toggles
+        # act per /new BEFORE the discovery: the SAME fold the save path
+        # runs (built-ins → enabled_backends; docked names park/restore
+        # their card file), so a restored card racks in THIS initialize.
+        self._fold_persisted_membership_toggles()
 
         # T-036 Addendum (2), the consumption point: a set `dock_want` select
         # runs the EXISTING docking machine here (probe + draft card + shim —

@@ -42,6 +42,20 @@ keys fail closed; `best_for`/`limits` stay human-authored (draft
 placeholders), and no probe ever overwrites a reviewed card — `--refresh`
 re-derives from a fresh probe on a provider version change instead.
 
+### The gear pane (declared surface) and its staleness
+
+The desktop gear pane (Plugins → memrack) renders the membership family
+from `config_schema.py`: the module computes `CONFIG_SCHEMA` AT IMPORT
+from the same config-surface seams the provider uses — one
+`<name>_in_rack` bool per backend (shipped built-ins; your dock card racks
+by presence the moment its file exists), the six static fields unchanged
+ahead of it, plus the `dock_want` select. The web server caches that
+schema per process: a dock written AFTER the backend started shows up in
+the pane only after a backend restart. The membership itself never waits
+for one — a pane toggle acts at the next `initialize()` (the persisted
+key parks/restores the card file or folds into `enabled_backends`), only
+the surface lags.
+
 ### The card-recorded query bridge (fan-out rail)
 
 A provider whose card records BOTH a mode claim and a `query_bridge` recipe

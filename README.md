@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (214 tests green)
+## Status — v0.7.0 (223 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -99,8 +99,14 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       (status + search/write answers); the chat confirm lands via the
       `memrack_card_review` tool (reviewed texts set verbatim, draft cleared,
       one chat-confirm revision, drift-recheck-immun afterwards)
+- [x] the declared gear pane carries the family too (T-037,
+      import-derived `config_schema.py`): the same `<name>_in_rack`
+      toggles + the `dock_want` select render beside the unchanged static
+      six; a pane toggle acts per `/new` through the initialize fold, and
+      the pane's schema view is frozen per backend process (the staleness
+      note below)
 
-## Config surface — membership toggles + dock_want (T-036)
+## Config surface — membership toggles + dock_want (T-036/T-037)
 
 memrack's config reaches the provider over TWO stores that converge in
 `save_config` (same block, one write): `plugins.memrack` in `config.yaml`
@@ -125,9 +131,23 @@ choice runs the docking machine's probe flow (isolated probe → draft card +
 binding shim) at the NEXT `initialize()` — an explicit user decision, no
 auto-dock.
 
-The static six fields on the declared desktop panel
-(gear → Plugins → memrack) stay as they are — the dynamic family lives on
-the provider surface above; both write the same dual-store block.
+The DECLARED desktop panel (gear → Plugins → memrack) carries the SAME
+family ADDITIVELY (T-037): `config_schema.py` builds `CONFIG_SCHEMA` at
+import time from the SAME config-surface seams — the six static fields
+stay first and byte-identical, then one `<name>_in_rack` toggle per known
+backend (the shipped built-ins plus the ACTIVE dock cards in
+`backends.d/`; the default follows the current membership stand) and the
+`dock_want` select. Both panes write the same dual-store block, so the
+stores stay the single source of truth.
+
+**Staleness (Achtung)**: the web server caches the schema per file path,
+in-process — the family (docked names, the `dock_want` offers, the toggle
+defaults) is FROZEN per backend process: a backend docked LATER appears
+in the pane only after a backend restart. The memrack membership itself
+waits for NO restart: a pane toggle acts per `/new` (the initialize fold
+— the same consumption law the `dock_want` choice follows; the persisted
+key parks/restores the docked card file or folds into `enabled_backends`),
+only the surface lags, never the rack.
 
 ## Install (experimental, not yet published)
 
