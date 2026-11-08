@@ -275,6 +275,43 @@ def test_docked_toggle_parks_and_unparks_the_card(tmp_path):
     assert not (dock_dir / "disabled-nobody.yaml").exists(), nobody
 
 
+def _plugins_block(tmp_path):
+    """plugins.memrack from the wizard store (the write-path's yaml leg)."""
+    import yaml
+    data = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8-sig"))
+    return ((data or {}).get("plugins") or {}).get("memrack") or {}
+
+
+def test_toggle_fold_writes_the_stores_consistently(tmp_path):
+    """Addendum (1): 'Toggle schreibt die Str-Felder konsistent' — the
+    write-path fold runs against the CURRENT live stand (a partial submit
+    carrying only the toggle folds onto the rack's stand instead of
+    resetting enabled_backends to defaults), the folded stand is written
+    once, and a persisted toggle key echoes the folded stand (a
+    floor-absorbed off re-renders 'true' — the Basisfall law visible in the
+    UI); a DOCKED member's toggle never persists a key (presence is the
+    state)."""
+    prov = MR._MemrackBase()
+    prov.save_config({"wiki_in_rack": True}, str(tmp_path))
+    block = _plugins_block(tmp_path)
+    assert MR._norm_backends(block["enabled_backends"]) == \
+        ["base-db", "state-episodic", "wiki"], block
+    assert block["wiki_in_rack"] == "true", block
+
+    prov.save_config({"base-db_in_rack": "false"}, str(tmp_path))
+    block = _plugins_block(tmp_path)
+    assert "base-db" in MR._norm_backends(block["enabled_backends"]), \
+        "Basisfall: the floor is never toggled completely off (store form)"
+    assert block["base-db_in_rack"] == "true", \
+        "the stored key echoes the folded stand, never the absorbed lie: %s" % block
+
+    prov.save_config({"state-episodic_in_rack": "false"}, str(tmp_path))
+    block = _plugins_block(tmp_path)
+    assert MR._norm_backends(block["enabled_backends"]) == ["base-db", "wiki"], block
+    assert block["state-episodic_in_rack"] == "false", block
+    assert block["wiki_in_rack"] == "true", block   # only the toggled name moved
+
+
 def test_get_config_schema_is_instance_derived(tmp_path):
     """Addendum (1): 'get_config_schema() wird instanz-beziehbar — je
     Backend (built-ins + DOCKED aus backends.d)' — the initialized
@@ -347,6 +384,26 @@ def test_dock_want_unknown_choice_is_honest_refusal(tmp_path):
     assert out.get("refused") is True, out
     assert not (tmp_path / "plugins" / "memrack" / "backends.d" /
                 "nobody.yaml").exists(), "a refused dock never leaves a card"
+
+
+def test_dock_want_choice_over_an_explicit_park_refuses(tmp_path):
+    """Addendum (2) + the membership-toggle law (the same fail-closed family
+    as the machine's reviewed-card law): a persisted dock_want whose dock
+    card is PARKED (the toggle's later, explicit decision) does not re-dock
+    — the honest refusal comes back, the machine is never consulted and the
+    card file stays parked (a stale select must not churn over an explicit
+    park)."""
+    _draft_dock(tmp_path, "fakesvc")
+    assert "error" not in CS.set_docked_membership(
+        "fakesvc", False, hermes_home=str(tmp_path))
+    spy = _SpyDocking()
+    out = CS.dock_want_hook({"dock_want": "fakesvc"},
+                            hermes_home=str(tmp_path), docking=spy)
+    assert out.get("refused") is True, out
+    assert spy.docked == [], "a parked dock is never re-probed by a stale select"
+    dock_dir = tmp_path / "plugins" / "memrack" / "backends.d"
+    assert not (dock_dir / "fakesvc.yaml").exists(), out
+    assert (dock_dir / "disabled-fakesvc.yaml").exists(), "the park stands"
 
 
 def test_get_config_schema_carries_the_dock_want_select(tmp_path):

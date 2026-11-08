@@ -557,22 +557,31 @@ class _MemrackBase:
     def _fold_membership_toggles(self, values, hermes_home=None):
         """The `<name>_in_rack` fold over ONE submitted values dict (pure:
         returns the values dict the stores will receive — never the caller's
-        dict). Built-in names → `enabled_backends` via the config-surface
-        seam; docked-card names → the presence rename via
-        set_docked_membership (key dropped, presence is the state). Toggle
-        values normalize to the wizard's "true"/"false" strings when a key
-        persists, so both surfaces read one convention."""
+        dict). The fold runs against the CURRENT live stand (both stores read
+        via _profile_config) — a partial submit carrying ONLY a toggle folds
+        that toggle onto the rack's stand, it does not reset
+        `enabled_backends` to defaults. Built-in names → `enabled_backends`
+        via the config-surface seam (the folded stand is written once as the
+        fold's output); docked-card names → the presence rename via
+        set_docked_membership (key dropped, presence is the state). Persisted
+        toggle keys echo the folded stand — never a lie on the next render
+        (a floor-absorbed off re-renders as "true")."""
         folded = dict(values or {})
+        keys = [k for k in folded
+                if isinstance(k, str) and k.endswith("_in_rack")]
+        if not keys:
+            return folded   # nothing to fold — no store read, no writes
         try:
             cs = _config_surface_module()
+            carry = dict(self._profile_config(_hermes_home(hermes_home)))
             docks = self._docked_card_names(_hermes_home(hermes_home))
-            for key in sorted(k for k in folded
-                              if isinstance(k, str) and k.endswith("_in_rack")):
+            folded_builtins = False
+            for key in sorted(keys):
                 name = key[: -len("_in_rack")].strip()
-                state = folded.get(key)
-                on = _truthy(state)
                 if not name:
                     continue
+                state = folded.get(key)
+                on = _truthy(state)
                 if name in docks:
                     report = cs.set_docked_membership(name, on,
                                                       hermes_home=hermes_home)
@@ -581,8 +590,14 @@ class _MemrackBase:
                                      name, report.get("error"))
                     folded.pop(key, None)   # presence is the state, not a key
                 else:
-                    folded = cs.merge_membership_toggle(folded, key, state)
-                    folded[key] = "true" if on else "false"
+                    carry = cs.merge_membership_toggle(carry, key, state)
+                    folded[key] = ("true" if name in _norm_backends(
+                        carry.get("enabled_backends")) else "false")
+                    folded_builtins = True
+            if folded_builtins:
+                # the folded stand is THE consistent write of this submission
+                folded["enabled_backends"] = carry.get("enabled_backends",
+                                                       folded.get("enabled_backends"))
         except Exception as exc:
             _LOG.warning("memrack toggle fold skipped (%s: %s)",
                          type(exc).__name__, exc)

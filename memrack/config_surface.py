@@ -72,6 +72,17 @@ def _utcnow_iso():
         "%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+def _docked_dir(hermes_home=None):
+    """Card directory mirror ($HERMES_HOME/plugins/memrack/backends.d/) —
+    the SAME path computation the docking machine and the provider core
+    carry (each spec-load-independent module mirrors it; the parity is the
+    established law, pinned by tests on both existing ones)."""
+    if hermes_home:
+        return Path(hermes_home) / "plugins" / "memrack" / "backends.d"
+    home = os.environ.get("HERMES_HOME") or Path.home() / ".hermes"
+    return Path(home) / "plugins" / "memrack" / "backends.d"
+
+
 def _docking():
     """The docking machine module, spec-path resolved beside THIS file and
     cached one-copy per process under the SAME sys.modules key the provider
@@ -203,8 +214,7 @@ def set_docked_membership(provider_name, member, *, hermes_home=None):
     if not name:
         return {"error": "docked membership toggle needs the card's name",
                 "hint": "memrack_status cards show the docked names"}
-    machine = _docking()
-    dock_dir = machine._docked_dir(hermes_home)
+    dock_dir = _docked_dir(hermes_home)
     wanted_off = ("disabled-%s.yaml" % name, "disabled-%s.yml" % name)
     wanted_on = ("%s.yaml" % name, "%s.yml" % name)
     active = next((dock_dir / candidate for candidate in wanted_on
@@ -309,11 +319,29 @@ def dock_want_hook(config, hermes_home=None, docking=None, offers=None,
     and ``loader`` are the machine's own documented test seams, forwarded
     untouched. The machine's receipt (or refusal report) is returned
     honestly — the caller decides the surfacing.
+
+    The one hook-level law (the same fail-closed family as the machine's
+    "a REVIEWED card is never overwritten"): a persisted choice whose dock
+    card is PARKED (the membership toggle's later, explicit decision) does
+    NOT re-dock — the honest refusal comes back and the card stays parked
+    (a stale select must not churn over an explicit park; restoring it is
+    the toggle's decision, or the select is cleared).
     """
     choice = str((config or {}).get("dock_want") or "").strip()
     if not choice:
         return None
     machine = docking if docking is not None else _docking()
+    dock_dir = _docked_dir(hermes_home)
+    for suffix in (".yaml", ".yml"):
+        if (dock_dir / ("disabled-%s%s" % (choice, suffix))).exists():
+            return {"provider": choice, "refused": True,
+                    "gap": "the dock of %r is PARKED by the membership "
+                           "toggle (disabled-%s%s on file) — restoring it "
+                           "is the toggle's decision; dock_want was honored "
+                           "once and never re-docks over an explicit park"
+                           % (choice, choice, suffix),
+                    "hint": "toggle %s_in_rack back on, or clear the "
+                            "dock_want select" % choice}
     return machine.dock(choice, probe=True, loader=loader, offers=offers,
                         hermes_home=hermes_home)
 
@@ -392,8 +420,8 @@ def review_card(provider_name, best_for, limits, *, hermes_home=None):
                          "and limits (empty or whitespace-only refuses — "
                          "the card never gets an empty claim)",
                 "provider": name}
-    machine = _docking()
-    dock_dir = machine._docked_dir(hermes_home)
+    machine = _docking()   # the card write/reuse discipline stays the machine's
+    dock_dir = _docked_dir(hermes_home)
     card_path = None
     for suffix in (".yaml", ".yml"):
         candidate = dock_dir / (name + suffix)
