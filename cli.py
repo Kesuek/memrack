@@ -64,7 +64,9 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
                              help="run the isolated probe and write the draft card")
             sub.add_argument("--refresh", action="store_true",
                              help="drift-recheck the card against the installed "
-                                  "provider version")
+                                  "provider version (an install that left the "
+                                  "house parks its card instead: the uninstall "
+                                  "grace)")
         sub.set_defaults(func=_run)
 
 

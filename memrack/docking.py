@@ -49,6 +49,8 @@ exactly like the registry does it).
 import os
 from pathlib import Path
 
+import datetime as _dt
+
 PROXY_BACKEND_MODULE = "_catalog_proxy"
 """The adapter module the draft card's shim resolves to (backends/_catalog_proxy.py).
 
@@ -525,7 +527,7 @@ def write_draft_card(provider_name, probe_report, *, hermes_home=None):
 # ── the dock dispatcher ─────────────────────────────────────────────────────
 
 def dock(provider_name, *, probe=False, refresh=False, loader=None,
-         offers=None, hermes_home=None):
+         offers=None, hermes_home=None, hub=None):
     """`memrack dock <provider>` — the offer/dock/probe dispatcher.
 
     probe=True: run probe() and write the DRAFT card (the designed
@@ -538,7 +540,20 @@ def dock(provider_name, *, probe=False, refresh=False, loader=None,
 
     ``offers``/``loader`` are the test-double seams (see catalog_offers/
     probe); by default the installed set comes from the real discovery.
+    ``hub`` is the uninstall-grace's hub seam (None = the real hub module,
+    resolved lazily exactly like the loader seam).
+
+    On the REFRESH driver the uninstall-grace law runs FIRST: a card whose
+    provider install left the house parks (never a bare refusal), a
+    re-installed flagged card restores, and an explicit membership park
+    stays untouched. Only when the grace does not apply does the established
+    flows follow (offer check, drift recheck).
     """
+    if refresh:
+        grace = _single_grace(provider_name, loader=loader, hub=hub,
+                              hermes_home=hermes_home)
+        if grace is not None:
+            return grace
     offers_list = catalog_offers(offers, hermes_home=hermes_home) \
         if offers is not None else catalog_offers(hermes_home=hermes_home)
     offer = next((o for o in offers_list if o.get("name") == provider_name), None)
@@ -788,3 +803,435 @@ def drift_recheck(provider_name, *, loader=None, hermes_home=None):
             "revised": True,
             "note": "card re-derived from the fresh probe; human best_for/"
                     "limits text untouched"}
+
+
+# ── the uninstall grace: park first, remove after retention ─────────────────
+
+FLAG_UNINSTALLED = "uninstalled_at"
+"""The card field the grace law sets when the provider's install left the
+house: the UTC-Z timestamp the retention clock reads. A card without it was
+parked by the membership toggle's explicit decision, never by the law."""
+
+FLAG_NOTE = "uninstall_note"
+"""The card field carrying the honest kept-until note written alongside the
+flag. `dock show` displays it; memrack_status serves it too."""
+
+DEFAULT_RETENTION_DAYS = 14
+"""The shipped retention stand (the config schema's declared default)."""
+
+_NEVER = -1
+"""The retention's never-sentinel (any negative value parses to it)."""
+
+_BACKUP_DIRNAME = "removed-cards"
+"""Backup directory leaf: <home>/plugin-data/memrack/removed-cards/."""
+_BACKUP_ROOT = ("plugin-data", "memrack")
+
+
+def _retention_days(value, *, default=DEFAULT_RETENTION_DAYS):
+    """`dock_retention_days` read-side law: a plain int; the declared default
+    when absent/blank/non-integer (garbage never deletes anything); 0 =
+    immediate; every negative value = never (the -1 sentinel)."""
+    if value is None or isinstance(value, bool) \
+            or (isinstance(value, str) and not value.strip()):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return _NEVER
+    return parsed
+
+
+def _age_days(timestamp, *, now=None):
+    """Days elapsed since a UTC-Z clock string; None when unparseable — a
+    corrupt clock never expires a card (fail-safe, kept + honest)."""
+    try:
+        parsed = _dt.datetime.fromisoformat(
+            str(timestamp).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    return (now - parsed).total_seconds() / 86400.0
+
+
+def _home_root(hermes_home=None):
+    """$HERMES_HOME resolution — the SAME fallback `_docked_dir` applies."""
+    if hermes_home:
+        return Path(hermes_home)
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def _backup_dir(hermes_home=None):
+    """Backups of files the retention group removes:
+    <home>/plugin-data/memrack/removed-cards/ (created 0700, files 0600)."""
+    path = _home_root(hermes_home)
+    for part in _BACKUP_ROOT:
+        path = path / part
+    return path / _BACKUP_DIRNAME
+
+
+def _card_name_of(path):
+    """The provider name a card file serves — the `disabled-` parked variant
+    resumes its plain stem (the established park/unpark naming law)."""
+    stem = path.stem
+    if stem.startswith("disabled-"):
+        stem = stem[len("disabled-"):]
+    return stem
+
+
+def _card_variants(dock, provider_name):
+    """Every docking artifact ONE provider owns on file, removal order
+    active card → parked card → the shim last (the shim is part of the dock)."""
+    out = []
+    for suffix in (".yaml", ".yml"):
+        for prefix in ("", "disabled-"):
+            candidate = dock / ("%s%s%s" % (prefix, provider_name, suffix))
+            if candidate.exists() and candidate not in out:
+                out.append(candidate)
+    shim = dock / ("%s.py" % provider_name)
+    if shim.exists():
+        out.append(shim)
+    return out
+
+
+def _grace_gate(card):
+    """The membership gate of the law: it acts on MACHINE-docked cards that
+    were members before — probe evidence or review revisions on file (a
+    reviewed card keeps its evidence through the review; a revision list
+    proves the chat-confirm ran). A hand bridge manifest (name/module only)
+    is outside the law: presence stays its own state."""
+    if not isinstance(card, dict):
+        return False
+    evidence = card.get("evidence")
+    revisions = card.get("revisions")
+    return (isinstance(evidence, dict) and bool(evidence)) \
+        or (isinstance(revisions, list) and bool(revisions))
+
+
+def uninstall_probe(provider_name, *, loader=None, hub=None):
+    """Install-loss probe — the grace law's gate.
+
+    Returns {installed: True|False|None, reason: str}. False ONLY when the
+    house has lost the install: no provider directory, no pip entry point
+    AND no loadable instance. A directory that still exists (e.g. the
+    plugins hub disabled flag) or an entry point counts as installed — the
+    merely inactive/broken state is the existing park/gap laws' business,
+    never an uninstall. None when the hub is unavailable (a hermes-less
+    process cannot tell — the law must not act)."""
+    name = str(provider_name or "").strip()
+    hub = hub if hub is not None else _plugins_memory()
+    if hub is None:
+        return {"installed": None,
+                "reason": "provider hub unavailable — the grace law stays inert"}
+    dir_finder = getattr(hub, "find_provider_dir", None)
+    if callable(dir_finder):
+        found_dir = None
+        try:
+            found_dir = dir_finder(name)
+        except Exception:
+            found_dir = None
+        if found_dir:
+            return {"installed": True,
+                    "reason": "install directory present (inactive/broken is "
+                              "the existing laws' business, not an uninstall)"}
+    entry_finder = getattr(hub, "find_provider_entry_point", None)
+    if callable(entry_finder):
+        entry = None
+        try:
+            entry = entry_finder(name)
+        except Exception:
+            entry = None
+        if entry:
+            return {"installed": True,
+                    "reason": "pip entry point present (installed)"}
+    if loader is None:
+        loader = _real_loader(name)
+    try:
+        provider = loader()
+    except Exception as exc:
+        return {"installed": False,
+                "reason": "no install dir, no entry point and the loader "
+                          "failed (%s: %s)" % (type(exc).__name__, exc)}
+    if provider is None:
+        return {"installed": False,
+                "reason": "no install dir, no entry point, no loadable instance"}
+    return {"installed": True, "reason": "loadable provider instance"}
+
+
+def grace_note(retention_days, *, now=None):
+    """The honest kept-until note written with the flag: uninstalled-parked
+    plus the retention's concrete consequence (until-date, immediate or
+    indefinite)."""
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    base = "provider uninstalled — parked"
+    if retention_days == _NEVER:
+        return base + "; card kept indefinitely (retention -1 = never remove)"
+    if retention_days == 0:
+        return base + "; card removed at this initialize (retention 0 = immediate)"
+    until = (now + _dt.timedelta(days=retention_days)).date().isoformat()
+    return base + ("; card kept until %s (retention %d days)"
+                   % (until, retention_days))
+
+
+def flag_card(path, *, note):
+    """Stamp `uninstalled_at` + the note onto ONE card file (the atomic-write
+    discipline: 0600 file, tmp-then-replace). An unreadable card is a
+    controlled error — the flag never invents a card."""
+    import yaml
+    try:
+        card = _read_card(path)
+    except Exception as exc:
+        return {"error": "card %s unreadable (%s: %s) — no flag written"
+                % (path.name, type(exc).__name__, exc)}
+    if not isinstance(card, dict):
+        return {"error": "card %s carries no mapping — no flag written"
+                % path.name}
+    card[FLAG_UNINSTALLED] = _utcnow_iso()
+    if note:
+        card[FLAG_NOTE] = note
+    _atomic_write(path, yaml.dump(card, default_flow_style=False,
+                                  allow_unicode=True, sort_keys=False))
+    return {"card": path.name, "uninstalled_at": card[FLAG_UNINSTALLED]}
+
+
+def unflag_card(path):
+    """Drop the uninstall flag + note from ONE card file (the restore law:
+    re-installed before the retention — the card racks again unchanged)."""
+    import yaml
+    try:
+        card = _read_card(path)
+    except Exception as exc:
+        return {"error": "card %s unreadable (%s: %s)"
+                % (path.name, type(exc).__name__, exc)}
+    if not isinstance(card, dict):
+        return {"error": "card %s carries no mapping" % path.name}
+    card.pop(FLAG_UNINSTALLED, None)
+    card.pop(FLAG_NOTE, None)
+    _atomic_write(path, yaml.dump(card, default_flow_style=False,
+                                  allow_unicode=True, sort_keys=False))
+    return {"card": path.name, "flag_cleared": True}
+
+
+def _profile_retention(hermes_home=None):
+    """The dual-store read for the machine's OWN drivers (the CLI refresh
+    path reads no provider): `plugins.memrack.dock_retention_days` from the
+    profile yaml, then the flat-json store whose keys win — the same merge
+    order the provider core applies (the mirrored-read convention; every
+    failure fails soft to the declared default)."""
+    home = _home_root(hermes_home)
+    value = None
+    try:
+        import yaml as _yaml
+        raw = _yaml.safe_load(
+            (home / "config.yaml").read_text(encoding="utf-8")) or {}
+        block = (raw.get("plugins") or {}).get(_SELF) or {}
+        if isinstance(block, dict):
+            value = block.get("dock_retention_days")
+    except Exception:
+        pass
+    try:
+        import json as _json
+        flat = home / _SELF / "config.json"
+        if flat.is_file():
+            data = _json.loads(flat.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict) \
+                    and data.get("dock_retention_days") is not None:
+                value = data.get("dock_retention_days")
+    except Exception:
+        pass
+    return _retention_days(value)
+
+
+def retention_cleanup(hermes_home=None, *, retention_days=None):
+    """The retention group: every card carrying `uninstalled_at` older than
+    the retention leaves WITH a per-file backup under
+    plugin-data/memrack/removed-cards/ (0600 file, 0700 dir — the card and
+    the shim both land there before their removal). The removal report is
+    honest per provider, keyed on the card FILE's name law. -1 never
+    removes; a corrupt clock never expires anything."""
+    dock = _docked_dir(hermes_home)
+    if not dock.is_dir():
+        return []
+    days = _retention_days(retention_days)
+    if days == _NEVER:
+        return []
+    now = _dt.datetime.now(_dt.timezone.utc)
+    removed_report = []
+    for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
+        if path.name.startswith("_"):
+            continue
+        try:
+            card = _read_card(path) or {}
+        except Exception:
+            continue   # unparseable = the loading laws' business, never expiry
+        ts = card.get(FLAG_UNINSTALLED) if isinstance(card, dict) else None
+        if not ts:
+            continue
+        age = _age_days(ts, now=now)
+        if age is None or age < days:
+            continue   # kept (countdown visible on the status surface)
+        name = _card_name_of(path)
+        victims = _card_variants(dock, name)
+        removed, backups, error = [], [], None
+        if victims:
+            stamp = _dt.datetime.now(_dt.timezone.utc).strftime(
+                "%Y%m%dT%H%M%S.%f")
+            backup_dir = _backup_dir(hermes_home)
+            try:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                os.chmod(backup_dir, 0o700)
+            except OSError:
+                pass
+            for victim in victims:
+                backup_path = backup_dir / ("%s-%s" % (stamp, victim.name))
+                try:
+                    backup_path.write_bytes(victim.read_bytes())
+                    os.chmod(backup_path, 0o600)
+                    backups.append(backup_path.name)
+                    victim.unlink()
+                    removed.append(victim.name)
+                except OSError as exc:
+                    error = "%s: %s" % (type(exc).__name__, exc)
+                    break
+        entry = {"provider": name,
+                 "removed": removed,
+                 "backups": backups,
+                 "age_days": round(age, 2),
+                 "note": "removed card %s after retention" % name}
+        if error:
+            entry["error"] = error
+        removed_report.append(entry)
+    return removed_report
+
+
+def uninstalled_cards(hermes_home=None, *, retention_days=None):
+    """The status scan (read-only): every card carrying the uninstall flag,
+    parked or active — {backend, card, state, uninstalled_at, note,
+    days_left}. days_left counts the RETENTION down (None = indefinite or a
+    corrupt clock: both mean kept without a countdown)."""
+    dock = _docked_dir(hermes_home)
+    if not dock.is_dir():
+        return []
+    days = _retention_days(retention_days)
+    now = _dt.datetime.now(_dt.timezone.utc)
+    out = []
+    for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
+        if path.name.startswith("_"):
+            continue
+        try:
+            card = _read_card(path) or {}
+        except Exception:
+            continue
+        if not isinstance(card, dict) or not card.get(FLAG_UNINSTALLED):
+            continue
+        age = _age_days(card[FLAG_UNINSTALLED], now=now)
+        if age is None or days == _NEVER:
+            days_left = None
+        else:
+            days_left = max(0, int(days - age) if (days - age) >= 0 else 0)
+        out.append({"backend": _card_name_of(path),
+                    "card": path.name,
+                    "state": "parked" if path.name.startswith("disabled-")
+                             else "active",
+                    "uninstalled_at": card[FLAG_UNINSTALLED],
+                    "note": card.get(FLAG_NOTE) or "",
+                    "days_left": days_left})
+    return out
+
+
+def _single_grace(provider_name, *, loader=None, hub=None, hermes_home=None):
+    """The grace law for ONE provider on the explicit refresh driver.
+
+    Returns a receipt dict when the law applied (park / restore / an
+    explicit membership park stays untouched), or None when the law does
+    not apply (no card, no machine-dock card, hub unknown, provider simply
+    present — the established offer/drift flow follows). The parked card's
+    rename follows the established `disabled-<name>` presence convention
+    (the card file's bytes ride along; the shim is never touched)."""
+    name = str(provider_name or "").strip()
+    if not name:
+        return None
+    dock = _docked_dir(hermes_home)
+    if not dock.is_dir():
+        return None
+    active = next((dock / ("%s%s" % (name, s)) for s in (".yaml", ".yml")
+                   if (dock / ("%s%s" % (name, s))).exists()), None)
+    parked = next((dock / ("disabled-%s%s" % (name, s))
+                   for s in (".yaml", ".yml")
+                   if (dock / ("disabled-%s%s" % (name, s))).exists()), None)
+    card_file = active or parked
+    if card_file is None:
+        return None
+    try:
+        card = _read_card(card_file) or {}
+    except Exception:
+        return None   # unreadable = the docking laws' business
+    if not _grace_gate(card):
+        return None   # a hand bridge manifest is outside the law
+    retention = _profile_retention(hermes_home)
+    note = card.get(FLAG_NOTE) or grace_note(retention)
+    if active is not None:
+        probe = uninstall_probe(name, loader=loader, hub=hub)
+        if probe["installed"] is False:
+            parked_target = dock / ("disabled-%s" % active.name)
+            os.replace(active, parked_target)   # the presence park convention
+            stamped = card.get(FLAG_UNINSTALLED)
+            if not stamped:
+                written = flag_card(parked_target, note=note)
+                if "error" in written:
+                    return {"provider": name, "status": "park-error",
+                            "error": written["error"]}
+                stamped = written["uninstalled_at"]
+            return {"provider": name, "status": "uninstalled-parked",
+                    "card": parked_target.name,
+                    "uninstalled_at": stamped,
+                    "note": note,
+                    "reason": probe["reason"],
+                    "retention_days": retention}
+        if probe["installed"] is None:
+            return None
+        if card.get(FLAG_UNINSTALLED):
+            cleared = unflag_card(active)
+            if "error" in cleared:
+                return {"provider": name, "status": "unflag-error",
+                        "error": cleared["error"]}
+            return {"provider": name, "status": "installed-again",
+                    "flag_cleared": True,
+                    "note": "provider installed again — the stale uninstall "
+                            "flag left the active card (the established "
+                            "drift recheck follows)"}
+        return None
+    # parked variant below: only the law's own flag reopens it
+    if not card.get(FLAG_UNINSTALLED):
+        return {"provider": name, "status": "parked-untouched",
+                "note": "parked by the membership toggle's explicit "
+                        "decision (no uninstall flag) — the grace never "
+                        "undoes an explicit park"}
+    probe = uninstall_probe(name, loader=loader, hub=hub)
+    if probe["installed"] is None:
+        return None
+    if probe["installed"] is False:
+        age = _age_days(card[FLAG_UNINSTALLED])
+        days_left = None if age is None or retention == _NEVER else max(
+            0, int(retention - (age or 0)))
+        return {"provider": name, "status": "still-uninstalled",
+                "card": parked.name,
+                "uninstalled_at": card[FLAG_UNINSTALLED],
+                "days_left": days_left,
+                "retention_days": retention,
+                "note": note}
+    target = dock / (parked.name[len("disabled-"):]
+                     if parked.name.startswith("disabled-")
+                     else parked.name)
+    os.replace(parked, target)
+    cleared = unflag_card(target)
+    if "error" in cleared:
+        return {"provider": name, "status": "restored-flag-error",
+                "card": target.name, "error": cleared["error"]}
+    return {"provider": name, "status": "restored-from-uninstall",
+            "card": target.name,
+            "note": "provider installed again — card restored without a "
+                    "re-probe (the card's recorded decisions stay)"}

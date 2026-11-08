@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (224 tests green)
+## Status — v0.7.0 (239 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -85,6 +85,13 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       serves one `memrack_search` rail and its hits join the SAME merged pool
       (the adapter executes the recorded recipe, never a guessed signature;
       see `docs/backend-guide.md` "The card-recorded query bridge")
+- [x] uninstall grace for the docks: when a docked provider's install leaves
+      the house, its card parks immediately (presence rename, honest
+      `uninstalled_at` flag + kept-until note, visibly reported in
+      `memrack_status` — never a silent absence, never dock-error spam);
+      `dock_retention_days` (default 14, 0 = immediate, -1 = never) decides
+      when park turns into removal with a per-file backup, and a re-install
+      before the retention restores the card untouched (no re-probe)
 - [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
 - [x] config-surface for the docks (T-036): one `<name>_in_rack` membership
@@ -125,6 +132,10 @@ which normalize from exactly this method) is **instance-derived**:
   = racked, parked `disabled-<provider>.yaml` = out until re-docked).
 - one `dock_want` select listing the installed, INACTIVE catalog memory
   providers (the docking machine's own offer filtering) plus `""` (none).
+- one `dock_retention_days` number (default 14): how long an
+  uninstalled-parked dock card survives before its card + shim are removed
+  (0 = immediately, -1 = never; each removed file lands as a backup under
+  `plugin-data/memrack/removed-cards/`).
 
 Everything writes consistently at save time: toggling a built-in folds into
 `enabled_backends` (deduplicate, `base-db` as the floor is never fully

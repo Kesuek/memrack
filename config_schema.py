@@ -200,6 +200,13 @@ _STATIC_FIELDS = (
         default="http://127.0.0.1:11434", group="vec",
         description="Ollama endpoint for vec embeddings",
     ),
+    ProviderField(
+        key="dock_retention_days", label="Uninstall retention days",
+        kind=KIND_NUMBER, default="14",
+        description="Days an uninstalled dock card stays parked before card + "
+                    "shim are removed (0 = immediately, -1 = never)",
+        inline=True,
+    ),
 )
 
 

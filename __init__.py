@@ -376,6 +376,13 @@ class _MemrackBase:
                 "description": "Default result count for memrack_search (max 32)",
                 "default": 8,
             },
+            {
+                "key": "dock_retention_days",
+                "description": "Days an uninstalled dock card stays parked before card + shim "
+                               "are removed (0 = immediately, -1 = never; backups land in "
+                               "plugin-data/memrack/removed-cards)",
+                "default": 14,
+            },
         ]
         for builder in (self._membership_toggle_fields, self._dock_want_field_now):
             try:
@@ -433,6 +440,7 @@ class _MemrackBase:
         self._force = False
         self._route_log = None
         self._dock_want_outcome = None
+        self._uninstalled_report = None
         self._lock = threading.Lock()
 
     # ── lifecycle ──
@@ -650,6 +658,35 @@ class _MemrackBase:
         # runs (built-ins → enabled_backends; docked names park/restore
         # their card file), so a restored card racks in THIS initialize.
         self._fold_persisted_membership_toggles()
+
+        # the UNINSTALL-GRACE, consumed BEFORE the discovery — a docked card
+        # whose provider install left the house parks immediately (honest
+        # uninstalled-at flag + kept-until note, NO dock-error spam: the
+        # parked manifest never reaches the rack), a re-installed flagged
+        # card restores without a re-probe, and the retention group removes
+        # long-expired cards with a per-file backup. A failure is a
+        # warning — the initialize racks on (the Basisfall duty).
+        try:
+            self._uninstalled_report = _config_surface_module() \
+                .uninstall_grace_hook(self._config, hermes_home=self._hermes_home)
+            grace = self._uninstalled_report
+            if isinstance(grace, dict):
+                if grace.get("parked") or grace.get("removed") \
+                        or grace.get("restored"):
+                    _LOG.info(
+                        "memrack uninstall grace: parked=%s restored=%s "
+                        "removed=%s",
+                        [p.get("provider") for p in grace.get("parked", [])],
+                        [p.get("provider") for p in grace.get("restored", [])],
+                        [p.get("provider") for p in grace.get("removed", [])])
+                if grace.get("error"):
+                    _LOG.warning("memrack uninstall grace failed: %s",
+                                 grace["error"])
+        except Exception as exc:
+            self._uninstalled_report = {
+                "error": "%s: %s" % (type(exc).__name__, exc)}
+            _LOG.warning("memrack uninstall grace hook failed: %s: %s",
+                         type(exc).__name__, exc)
 
         # T-036 Addendum (2), the consumption point: a set `dock_want` select
         # runs the EXISTING docking machine here (probe + draft card + shim —
@@ -1487,6 +1524,21 @@ class _MemrackBase:
             "pending_docks": self._rescan_dock(),
             "session_id": self._session_id,
         })
+        # The uninstall-grace surface (honest, never a silent absence):
+        # docked-but-inactive cards whose provider install left the house —
+        # with the flag, the kept-until note and the RETENTION countdown —
+        # plus this initialize's removal receipts.
+        if self._hermes_home:
+            try:
+                out["uninstalled_docks"] = self._docking_module() \
+                    .uninstalled_cards(
+                    self._hermes_home,
+                    retention_days=self._config.get("dock_retention_days"))
+            except Exception:
+                pass    # the status never crashes over the surface (it degrades)
+            report = getattr(self, "_uninstalled_report", None)
+            if isinstance(report, dict) and report.get("removed"):
+                out["retention_cleanups"] = list(report["removed"])
         return out
 
 
@@ -1498,7 +1550,8 @@ _TOOL_DESCRIPTIONS = {
                      "the destination backend via the rack card (default: base-db). Structural "
                      "knowledge belongs in wiki pages (file tools), not here.",
     "memrack_status": "Rack inventory: backends with card (best_for/limits/modes), heat counters, "
-                      "gaps (engines that degraded), parked/docking errors.",
+                      "gaps (engines that degraded), parked/uninstalled-docked cards (with the "
+                      "retention countdown), retention removal receipts and docking errors.",
     "memrack_import": "Import the builtin memory's legacy entries (MEMORY.md/USER.md, §-delimited) "
                       "as fact rows — idempotent via hash-dedupe. Migration job, once per profile.",
     "memrack_dock": "The catalog-provider docking machine: list installed, inactive catalog memory "
@@ -1506,7 +1559,10 @@ _TOOL_DESCRIPTIONS = {
                     "mirrored effective tool names), run the isolated probe (action=probe writes "
                     "the draft card), refresh after a provider update (drift-recheck), or remove "
                     "a dock. Listing/offering never docks anything — the user decides; writes go "
-                    "through an explicit, decision-recorded card (fail-closed otherwise).",
+                    "through an explicit, decision-recorded card (fail-closed otherwise). An "
+                    "install that left the house parks its card instead (the uninstall grace: "
+                    "kept until the dock_retention_days retention — default 14 days — then "
+                    "removed with a per-file backup; a re-install restores it).",
     "memrack_card_review": "Confirm one docked provider's PROPOSED card after the chat "
                            "agreement: sets the reviewed best_for/limits texts VERBATIM "
                            "(backend=<dock name>), clears the draft marker and records one "

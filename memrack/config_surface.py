@@ -380,6 +380,142 @@ def pending_flags(card):
     return {"pending_confirmation": True, "pending_hint": hint}
 
 
+def uninstall_grace_hook(config, hermes_home=None, docking=None, hub=None,
+                         loader_of=None):
+    """initialize()-consumption of the UNINSTALL-GRACE.
+
+    Three passes over the ONE dock dir, in order (the later passes see the
+    earlier ones' renames):
+
+    1. PARK — every ACTIVE machine-dock card (the membership gate: probe
+       evidence or review revisions on file; hand bridge manifests stay
+       outside) whose provider install left the house parks through the
+       established set_docked_membership rename (presence, no deletion, the
+       shim untouched); the flagged card carries `uninstalled_at` + the
+       honest kept-until note. A card that carries the flag ALREADY was
+       parked before and manually re-activated while still uninstalled: the
+       re-park keeps its ORIGINAL timestamp (the clock never resets).
+    2. RESTORE — every flagged PARKED card whose provider is installed again
+       opens (rename back + the flag drops, WITHOUT a re-probe: the card's
+       recorded decisions stay). A parked card WITHOUT the flag is the
+       membership toggle's explicit decision and is left alone.
+    3. RETENTION — the machine's cleanup group removes cards whose
+       `uninstalled_at` is older than the retention (per-file backup under
+       plugin-data/memrack/removed-cards/, honest removal notes).
+
+    ``config`` carries `dock_retention_days` (default 14; 0 = immediate;
+    -1/any negative = never). ``hub`` is the machine's hub seam (None = the
+    real hub module, resolved lazily); the whole law is INERT without a
+    hub — a hermes-less process cannot tell an uninstall from an unknown,
+    so it acts not at all (the existing presence laws stay). ``loader_of``
+    is the optional per-name loader seam (name -> () -> provider instance).
+    Never raises: an unexpected failure degrades to {"error": ...} and the
+    initialize keeps its rack duty (the Basisfall duty).
+    """
+    machine = docking if docking is not None else _docking()
+    retention = machine._retention_days((config or {}).get("dock_retention_days"))
+    report = {"retention_days": retention, "parked": [], "restored": [],
+              "removed": [], "kept": []}
+    try:
+        dock_dir = _docked_dir(hermes_home)
+        if not dock_dir.is_dir():
+            return report
+        if hub is None:
+            hub = machine._plugins_memory()
+        if hub is None:
+            report["kept"].append({
+                "reason": "provider hub unavailable — the grace law does "
+                          "not act"})
+            return report
+        # pass 1 — uninstalled ACTIVE cards park (honest note, no dock error)
+        for path in sorted(list(dock_dir.glob("*.yaml"))
+                           + list(dock_dir.glob("*.yml"))):
+            if path.name.startswith("_") or path.name.startswith("disabled-"):
+                continue
+            try:
+                card = machine._read_card(path) or {}
+            except Exception as exc:
+                report["kept"].append({
+                    "provider": path.stem,
+                    "reason": "unreadable card (%s: %s) — the loading laws "
+                              "keep it" % (type(exc).__name__, exc)})
+                continue
+            if not machine._grace_gate(card):
+                continue   # a hand bridge manifest is outside the law
+            name = str(card.get("name") or path.stem).strip()
+            loader = loader_of(name) if callable(loader_of) else None
+            probe = machine.uninstall_probe(name, loader=loader, hub=hub)
+            if probe["installed"] is not False:
+                if card.get(machine.FLAG_UNINSTALLED):
+                    cleared = machine.unflag_card(path)
+                    report["kept"].append({
+                        "provider": name,
+                        "flag_cleared": cleared.get("flag_cleared"),
+                        "reason": probe["reason"]})
+                continue
+            out = set_docked_membership(name, False, hermes_home=hermes_home)
+            parked_name = out.get("parked")
+            if not parked_name:
+                report["kept"].append({"provider": name,
+                                       "reason": out.get("error")})
+                continue
+            entry = {"provider": name, "card": parked_name,
+                     "note": card.get(machine.FLAG_NOTE)
+                             or machine.grace_note(retention)}
+            if not card.get(machine.FLAG_UNINSTALLED):
+                written = machine.flag_card(dock_dir / parked_name,
+                                            note=entry["note"])
+                if "error" in written:
+                    entry["error"] = written["error"]
+                else:
+                    entry["uninstalled_at"] = written["uninstalled_at"]
+            else:
+                entry["uninstalled_at"] = card[machine.FLAG_UNINSTALLED]
+            report["parked"].append(entry)
+        # pass 2 — re-installed flagged PARKED cards restore (no re-probe)
+        for path in sorted(list(dock_dir.glob("disabled-*.yaml"))
+                           + list(dock_dir.glob("disabled-*.yml"))):
+            try:
+                card = machine._read_card(path) or {}
+            except Exception as exc:
+                report["kept"].append({
+                    "provider": machine._card_name_of(path),
+                    "reason": "unreadable parked card (%s: %s)"
+                              % (type(exc).__name__, exc)})
+                continue
+            if not isinstance(card, dict) \
+                    or not card.get(machine.FLAG_UNINSTALLED):
+                continue   # the toggle's explicit park is not the law's
+            if not machine._grace_gate(card):
+                continue
+            name = machine._card_name_of(path)
+            loader = loader_of(name) if callable(loader_of) else None
+            probe = machine.uninstall_probe(name, loader=loader, hub=hub)
+            if probe["installed"] is not True:
+                continue   # still gone / unknown — the retention clock runs
+            out = set_docked_membership(name, True, hermes_home=hermes_home)
+            restored_name = out.get("card")
+            if not restored_name:
+                report["kept"].append({"provider": name,
+                                       "reason": out.get("error")})
+                continue
+            cleared = machine.unflag_card(dock_dir / restored_name)
+            entry = {"provider": name, "card": restored_name,
+                     "note": "provider installed again — card restored "
+                             "without a re-probe (the card's recorded "
+                             "decisions stay)"}
+            if "error" in cleared:
+                entry["error"] = cleared["error"]
+            report["restored"].append(entry)
+        # pass 3 — the retention group (clock-based, honest removals)
+        report["removed"] = machine.retention_cleanup(
+            hermes_home=hermes_home, retention_days=retention)
+        return report
+    except Exception as exc:
+        report["error"] = "%s: %s" % (type(exc).__name__, exc)
+        return report
+
+
 def review_card(provider_name, best_for, limits, *, hermes_home=None):
     """The memrack_card_review tool's card writer (Addendum (4)).
 

@@ -42,6 +42,31 @@ keys fail closed; `best_for`/`limits` stay human-authored (draft
 placeholders), and no probe ever overwrites a reviewed card — `--refresh`
 re-derives from a fresh probe on a provider version change instead.
 
+### The uninstall grace (park first, remove after retention)
+
+A docked provider whose install leaves the house does NOT vanish silently.
+At every `initialize()` — and on every `dock <provider> --refresh` — the
+rack checks the install against the card; when the provider is neither a
+directory, a pip entry point nor loadable anymore, the card PARKS
+immediately (the established `disabled-<provider>.yaml` presence rename,
+shim untouched) and carries `uninstalled_at` + `uninstall_note`
+("provider uninstalled — parked; card kept until ..."). The parked card
+stays visible: `memrack_status` lists it under `uninstalled_docks` with
+the remaining retention days, while the rack simply routes around it (no
+gap noise, no dock-error spam). A provider that is merely INACTIVE (its
+install directory still exists — the plugins hub disabled case) is NOT an
+uninstall: the existing park/gap laws keep applying and no flag is set.
+
+The clock is `dock_retention_days` (default 14; 0 = immediate; -1 =
+never): after the retention expires, the card and its shim are REMOVED —
+each file copied first to `plugin-data/memrack/removed-cards/` (0600) as
+an honest backup, reported as "removed card <name> after retention". A
+re-install before the retention restores the card as it was (rename back,
+flag removed, no re-probe — recorded card decisions survive), and a card
+parked WITHOUT the flag (the membership toggle's explicit decision) is
+never touched by the grace. Hand-written bridge manifests (name/module
+only, no machine dock evidence) live outside this law entirely.
+
 ### The gear pane (declared surface) and its staleness
 
 The desktop gear pane (Plugins → memrack) renders the membership family
