@@ -13,9 +13,11 @@ The Basisfall is design law: with only the built-in `base-db` backend
 
 import importlib.util
 import hashlib
+import inspect
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -67,6 +69,19 @@ def _norm_backends(value):
 
 _MEMORY_WRITE_TYPES = tuple(
     (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
+
+
+def _write_accepts_target_hint(fn) -> bool:
+    """One signature probe for the import job: a foreign backend whose write() ignores
+    target_hint degrades to a plain write (log + proceed) instead of a TypeError per entry."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (ValueError, TypeError):
+        return False
+    for param in params.values():
+        if param.kind is param.VAR_KEYWORD or param.name == "target_hint":
+            return True
+    return False
 
 
 def _utcnow_iso():
@@ -252,7 +267,8 @@ class _MemrackBase:
             },
             {
                 "key": "enabled_backends",
-                "description": "Rack membership (comma list): base-db always; wiki/state-episodic opt-in",
+                "description": "Rack membership (comma list): base-db is always included as the "
+                               "floor; wiki/state-episodic opt-in",
                 "default": ",".join(_DEFAULT_ENABLED),
                 "choices": [",".join(c) for c in (
                     ("base-db",), ("base-db", "state-episodic"),
@@ -392,10 +408,14 @@ class _MemrackBase:
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
         self._config.update(self._profile_config(self._hermes_home))   # the file wins the live keys
 
+        # a re-initialize starts CLEAN: no stale gaps from a previous session, no stale force
+        self._gaps = []
+        self._force = False
+
         enabled = _norm_backends(self._config.get("enabled_backends"))
         if not enabled:
             enabled = list(_DEFAULT_ENABLED)
-        if len(enabled) >= 2 and DEFAULT_BACKEND not in enabled:
+        if DEFAULT_BACKEND not in enabled:   # the floor mounts with >=1 non-base entry already
             enabled = [DEFAULT_BACKEND] + enabled
         if _truthy(self._config.get("auto_enable")):   # activation auto-provision —
             for b in ("base-db", "wiki"):              # merge only, never a disable
@@ -674,8 +694,7 @@ class _MemrackBase:
                     "mode": {"type": "string",
                              "enum": list(_SEARCH_MODES) + ["all"],
                              "default": "all"},
-                    "backend": {"type": "string",
-                                "default": None},
+                    "backend": {"type": "string"},
                     "limit": {"type": "integer", "default": 8},
                 }, "required": ["query"],
                 "additionalProperties": False,
@@ -683,7 +702,7 @@ class _MemrackBase:
             "memrack_write": {
                 "type": "object", "properties": {
                     "content": {"type": "string"},
-                    "backend": {"type": "string", "default": None},
+                    "backend": {"type": "string"},
                     "kind": {"type": "string", "enum": list(WRITE_KINDS), "default": EXPLICIT},
                     "tags": {"type": "array", "items": {"type": "string"}},
                 }, "required": ["content"],
@@ -754,7 +773,7 @@ class _MemrackBase:
             return json.dumps({"error": "unknown mode %r" % mode,
                                "hint": "modes: all|fts|vec|pointers"}, ensure_ascii=False)
 
-        runs, engine_errors = [], []
+        runs, engine_errors, vec_backlog = [], [], 0
         carried = sorted({m for b in chosen for m in cards[b.name]["modes"]})
         if mode != "all" and mode not in carried:
             # the degradation law Degradation: a specifically requested mode that NO backend
@@ -778,6 +797,9 @@ class _MemrackBase:
                     hits = backend.search(query, m, limit) or []
                     for h in hits:
                         h["mode"] = m
+                    # an engine's completeness note (vec backfill batch) — popped, never fused
+                    backlog = max((int(h.pop("_vec_backlog", 0) or 0) for h in hits), default=0)
+                    vec_backlog = max(vec_backlog, backlog)
                     runs.append(hits)
                 except Exception as exc:
                     engine_errors.append({"backend": backend.name, "mode": m,
@@ -795,6 +817,8 @@ class _MemrackBase:
             hint += " Try mode 'vec' (paraphrases) or 'pointers' (directory);"
             hint += " broader phrasing helps too."
             result["hint"] = hint
+        if vec_backlog:   # honest incompleteness note: newer facts may sit un-embedded
+            result["vec_backlog"] = vec_backlog
         if cards:   # additive in-flow slot: the rack cards, rebuilt fresh
             result["cards"] = cards
         return json.dumps(result, indent=2, ensure_ascii=False)
@@ -867,6 +891,15 @@ class _MemrackBase:
             return json.dumps({"error": "backend %r does not carry write" % backend.name},
                               ensure_ascii=False)
         report = {"imported": 0, "duplicates": 0, "files": [], "errors": []}
+        accepts_hint = _write_accepts_target_hint(backend.write)
+        if not accepts_hint:
+            # a foreign backend ignoring target_hint: DEGRADE (log + proceed), never a
+            # TypeError per entry — honestly flagged, RRF collapse risk named
+            _LOG.warning("memrack import: backend %r ignores target_hint — importing "
+                         "without per-entry targets", backend.name)
+            report["note"] = ("backend %r ignores target_hint — entries imported without "
+                              "per-entry targets; same-content rows may collapse under "
+                              "the RRF merge" % backend.name)
         for fname, prefix in files:
             path = mem_dir / fname
             if not path.exists():
@@ -874,17 +907,20 @@ class _MemrackBase:
                                         "duplicates": 0, "note": "not present"})
                 continue
             raw = path.read_text(encoding="utf-8", errors="replace")
-            entries = [e.strip() for e in raw.split("\n\u00a7\n") if len(e.strip()) >= 10]
+            # CRLF-safe §-split (Windows-edited memory files split, too)
+            entries = [e.strip() for e in re.split(r"\r?\n\u00a7\r?\n", raw)
+                       if len(e.strip()) >= 10]
             file_imported = file_dup = 0
             for entry in entries:
                 try:
                     # S-3-HARDENING: the target identifies THE ENTRY, NOT the file —
                     # the RRF merge collapses per target: a file-wide target would
                     # silently swallow N-1 hits.
-                    tag_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()[:8]
-                    out = backend.write(EXPLICIT, entry,
-                                        target_hint="%s#%s" % (prefix, tag_hash),
-                                        tags=["import:" + fname])
+                    kwargs = {"tags": ["import:" + fname]}
+                    if accepts_hint:
+                        tag_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()[:8]
+                        kwargs["target_hint"] = "%s#%s" % (prefix, tag_hash)
+                    out = backend.write(EXPLICIT, entry, **kwargs)
                     if out.get("status") == "stored":
                         report["imported"] += 1
                         file_imported += 1
@@ -903,6 +939,8 @@ class _MemrackBase:
     def _tool_write(self, args):
         content = str(args.get("content") or "").strip()
         kind = args.get("kind") or EXPLICIT
+        if kind == "curation":        # legacy vocabulary — tolerated, stored as curated (A-3)
+            kind = CURATED
         backend_wish = args.get("backend") or None
         tags = args.get("tags") if isinstance(args.get("tags"), list) else None
         if not content:

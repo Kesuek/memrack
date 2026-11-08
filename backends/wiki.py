@@ -125,7 +125,7 @@ class WikiBackend:
     limits = "no atomic write (pages are written by the agent with file tools)"
     search_modes = ("fts",)   # static; the index is runtime-built
     writeable = False
-    write_types = ("explicit", "episodic", "semantic", "curation")
+    write_types = ("explicit", "curated")   # the write-kind vocabulary (pages are agent-written)
 
     def __init__(self):
         self._prov = None

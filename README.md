@@ -30,7 +30,7 @@ have.
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.5.0 (129 tests green)
+## Status — v0.5.0 (148 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -68,11 +68,13 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 
 ## Install (experimental, not yet published)
 
-From source:
+From source (copies ship without `tests/` and `docs/` — the same exclude list
+as `scripts/deploy_profiles.sh`, which is the canonical multi-profile deployer):
 
 ```bash
 git clone https://github.com/Kesuek/memrack
-rsync -a --exclude .git memrack/ $HERMES_HOME/plugins/memrack/
+rsync -a --exclude .git --exclude tests --exclude docs --exclude .pytest_cache \
+  --exclude __pycache__ memrack/ $HERMES_HOME/plugins/memrack/
 hermes config set memory.provider memrack   # experimental — see below
 ```
 

@@ -32,7 +32,7 @@ PLUGIN_NAME = "base-db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
-  id      INTEGER PRIMARY KEY,
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,   -- fresh stores: a deleted id is never recycled
   ts      TEXT NOT NULL,
   kind    TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -59,9 +59,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pointers_fts USING fts5(
 """
 
 
-_VEC_TABLE = """
-CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[768]);
-"""
+# The vec table is created DYNAMICALLY at initialize with the dimension probed from the
+# configured embedding model (facts_vec: rowid = the fact id it indexes).
 
 
 class BaseDbBackend:
@@ -70,7 +69,8 @@ class BaseDbBackend:
     limits = "ONE sentence per row on write; import allows multi-sentence legacy rows (tags import:)"
     search_modes = ("fts", "pointers")   # STATIC floor; card_modes() reports the DYNAMIC set
     writeable = True
-    write_types = ("explicit", "episodic", "semantic", "curation")  # accepts everything routed at it
+    # the write-kind vocabulary — legacy input "curation" is tolerated and normalized to "curated"
+    write_types = ("explicit", "curated")
 
     _EMBED_MODEL = "nomic-embed-text"
     _OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -82,12 +82,14 @@ class BaseDbBackend:
         self._provider_config: dict = {}
         self._vec_ok = False
         self._vec_gap = "not probed yet"
+        self._vec_batch = 32
 
     # ── lifecycle ──
     def initialize(self, session_id="", hermes_home=None, provider_config=None, **kwargs):
         self._provider_config = dict(provider_config or {})
         self._EMBED_MODEL = self._provider_config.get("embedding_model") or self._EMBED_MODEL
         self._OLLAMA_HOST = self._provider_config.get("ollama_host") or self._OLLAMA_HOST
+        self._vec_batch = self._read_vec_batch()
         base = Path(hermes_home or (Path.home() / ".hermes")) / "plugin-data" / "memrack"
         base.mkdir(parents=True, exist_ok=True)
         try:
@@ -111,8 +113,10 @@ class BaseDbBackend:
                 sqlite_vec.load(self._db)
                 self._db.enable_load_extension(False)
                 with self._lock:
-                    self._db.executescript(_VEC_TABLE)
+                    self._adopt_or_create_vec_table(self._vec_dimension())
                     self._db.commit()
+                if not self._vec_ok:
+                    return   # dimension mismatch — honest gap already recorded
                 _LOG.info("base-db vec engine ready (%s)", self._EMBED_MODEL)
             except (sqlite3.OperationalError, AttributeError) as exc:
                 # build without extension support / locked loader — honest degrade, never crash the floor
@@ -128,8 +132,12 @@ class BaseDbBackend:
 
     # ── docked contract: write / search / touch ──
     def write(self, kind, content, tags=None, target_hint=None, session_id=""):
-        """Store one fact row. Dedupe over sha256(content) — idempotent, replayable."""
+        """Store one fact row. Dedupe over sha256(content) — idempotent, replayable.
+        Legacy vocabulary: the kind "curation" is tolerated and stored as "curated"
+        (the write-kind vocabulary is explicit|curated only)."""
         assert self._db is not None, "not initialized"
+        if kind == "curation":      # legacy vocabulary (A-3) — normalize, never store it
+            kind = "curated"
         content = (content or "").strip()
         if not content:
             raise ValueError("empty content")
@@ -176,6 +184,50 @@ class BaseDbBackend:
         """DYNAMIC modes: the card the provider shows reflects the environment honestly."""
         return ("fts", "pointers") + (("vec",) if self._vec_ok else ())
 
+    def _read_vec_batch(self) -> int:
+        """Backfill batch from the provider config (wizard writes strings) — default 32."""
+        try:
+            batch = int(self._provider_config.get("vec_backfill_batch") or 32)
+        except (TypeError, ValueError):
+            batch = 32
+        return max(1, batch)
+
+    def _vec_dimension(self):
+        """Derive the embedding dimension from ONE model probe — the table is sized by
+        the CONFIGURED model, never by a hard-coded default. A probe failure degrades
+        honestly (gap + no vec); it does not fall back to a guessed dimension."""
+        try:
+            vecs = self._embed(["memrack dimension probe"])
+        except Exception as exc:
+            self._vec_gap = "dimension probe failed: %s: %s" % (type(exc).__name__, exc)
+            return None
+        if not vecs or not vecs[0]:
+            self._vec_gap = "dimension probe returned no embedding"
+            return None
+        return len(vecs[0])
+
+    def _adopt_or_create_vec_table(self, dim):
+        """Fresh store: create facts_vec at the probed dimension. Existing store: sanity-check
+        the table against the probed model — a row-backed mismatch degrades AT INIT with an
+        honest gap instead of failing inserts silently at search time."""
+        assert self._db is not None
+        if dim is None:
+            self._vec_ok = False
+            return
+        exists = self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_vec'").fetchone()
+        if exists is None:
+            self._db.executescript(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[%d]);" % dim)
+            return
+        existing = self._db.execute(
+            "SELECT vec_length(embedding) FROM facts_vec LIMIT 1").fetchone()
+        if existing and existing[0] is not None and int(existing[0]) != dim:
+            self._vec_ok = False
+            self._vec_gap = ("vec dimension mismatch: facts_vec expects %s, "
+                             "model %r produces %d" % (existing[0], self._EMBED_MODEL, dim))
+            _LOG.warning("base-db vec engine degraded to fts-only: %s", self._vec_gap)
+
     def _vec_probe(self):
         try:
             import sqlite_vec  # noqa: F401
@@ -206,44 +258,61 @@ class BaseDbBackend:
             data = _json.load(resp)
         return list(data.get("embeddings") or [])
 
-    def _vec_index_missing(self, batch=32):
-        """Index-refresh pass, part 1: embed facts lacking a vector — incremental, batched."""
+    def _vec_index_missing(self):
+        """Index-refresh pass, part 1: embed facts lacking a vector — incremental, batched.
+        Returns (indexed, backlog): backlog = rows STILL missing a vector after this batch,
+        surfaced as a note (no silent incompleteness impression)."""
         import sqlite_vec
-        rows = self._db.execute(
-            "SELECT f.id, f.content FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
-            " WHERE v.rowid IS NULL ORDER BY f.id LIMIT ?", (batch,)).fetchall()
-        if not rows:
-            return 0
+        assert self._db is not None
+        with self._lock:
+            backlog = self._db.execute(
+                "SELECT COUNT(*) FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
+                " WHERE v.rowid IS NULL").fetchone()[0]
+            if not backlog:
+                return 0, 0
+            rows = self._db.execute(
+                "SELECT f.id, f.content FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
+                " WHERE v.rowid IS NULL ORDER BY f.id LIMIT ?", (self._vec_batch,)).fetchall()
         ids = [r[0] for r in rows]
-        vecs = self._embed([r[1] for r in rows])
+        vecs = self._embed([r[1] for r in rows])       # network call OUTSIDE the lock
         if len(vecs) != len(rows):
             raise RuntimeError("embedding count mismatch: %d != %d" % (len(vecs), len(rows)))
-        with self._lock:
-            self._db.executemany(
-                "INSERT INTO facts_vec(rowid, embedding) VALUES(?, ?)",
-                [(rid, sqlite_vec.serialize_float32(v)) for rid, v in zip(ids, vecs)])
-            self._db.commit()
-        return len(rows)
+        try:
+            with self._lock:
+                self._db.executemany(
+                    "INSERT INTO facts_vec(rowid, embedding) VALUES(?, ?)",
+                    [(rid, sqlite_vec.serialize_float32(v)) for rid, v in zip(ids, vecs)])
+                self._db.commit()
+        except sqlite3.OperationalError as exc:
+            # e.g. a dimension mismatch against the model — honest degrade, never a silent fail
+            self._vec_ok = False
+            self._vec_gap = "vec insert failed (%s): %s" % (type(exc).__name__, exc)
+            _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
+            raise ValueError("vec disabled: %s" % self._vec_gap) from exc
+        return len(rows), backlog - len(rows)
 
     def _vec_knn(self, query, k):
         import sqlite_vec
-        q_vecs = self._embed([query])
+        q_vecs = self._embed([query])                  # network call OUTSIDE the lock
+        assert self._db is not None, "not initialized"
         if not q_vecs:
             return []
         qvec = sqlite_vec.serialize_float32(q_vecs[0])
-        rows = self._db.execute(
-            "SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?",
-            (qvec, k)).fetchall()
         hits = []
-        for i, (rid, dist) in enumerate(rows, 1):
-            row = self._db.execute(
-                "SELECT content, target, ts, hits FROM facts WHERE id=?", (rid,)).fetchone()
-            if row:
-                hits.append({"backend": self.name, "kind": "fact", "rank": i,
-                             "content": row[0],
-                             "target": row[1] or "base-db:%d" % rid, "ts": row[2],
-                             "hits": row[3],
-                             "distance": round(float(dist), 4)})
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?",
+                (qvec, k)).fetchall()
+            for i, (rid, dist) in enumerate(rows, 1):
+                row = self._db.execute(
+                    "SELECT content, target, ts, hits FROM facts WHERE id=?", (rid,)).fetchone()
+                if row:
+                    # `id` = the fact rowid: the provider's touch burns HEAT into semantic hits
+                    hits.append({"backend": self.name, "kind": "fact", "id": rid, "rank": i,
+                                 "content": row[0],
+                                 "target": row[1] or "base-db:%d" % rid, "ts": row[2],
+                                 "hits": row[3],
+                                 "distance": round(float(dist), 4)})
         return hits
 
     def search(self, query, mode, k):
@@ -272,8 +341,12 @@ class BaseDbBackend:
         elif mode == "vec":
             if not self._vec_ok:
                 raise ValueError("vec not available: %s" % self._vec_gap)
-            self._vec_index_missing()          # inline pass: backlog embeds on first vec query
-            return self._vec_knn(query, k)
+            indexed, backlog = self._vec_index_missing()   # inline pass on the first vec query
+            hits = self._vec_knn(query, k)
+            if backlog:                        # the honest incompleteness note on every hit
+                for h in hits:
+                    h["_vec_backlog"] = backlog
+            return hits
         else:
             raise ValueError("this engine carries mode %r not (modes: %s)"
                              % (mode, list(self.card_modes())))
@@ -342,24 +415,70 @@ class BaseDbBackend:
         # a per-entry target (hash8 suffix, same convention as the legacy import). A shared
         # target would let the RRF merge collapse N entries into one and a remove sweep
         # every sibling away.
-        import hashlib
-        tag_hash = hashlib.sha256((content or "").encode("utf-8")).hexdigest()[:8]
         base_target = "builtin:%s" % (target or "memory")
+        # the runtime mirrors replace/patch/remove with the FULL previous entry in metadata
+        previous = str((metadata or {}).get("previous_content") or "").strip()
         if action in ("add", "patch", "replace"):
+            if previous and action in ("patch", "replace"):
+                # patch/replace RESPECT previous_content: the old entry goes out first,
+                # the edited entry arrives as the fresh per-entry-target row
+                self._remove_facts(previous, base_target)
             return self.write("explicit", content,
                               tags=[action] if action not in ("add",) else None,
-                              target_hint="%s#%s" % (base_target, tag_hash),
+                              target_hint="%s#%s" % (base_target, hashlib.sha256(
+                                  (content or "").encode("utf-8")).hexdigest()[:8]),
                               session_id=session_id)
         if action == "remove":
-            assert self._db is not None
-            with self._lock:
-                precise_target = "%s#%s" % (base_target, tag_hash)
-                self._db.execute("DELETE FROM facts WHERE content=? OR target=?",
-                                 ((content or "").strip(), precise_target))
-                self._fts_rebuild()
-                self._db.commit()
-            return {"status": "removed", "needle": content}
+            return self._remove_facts(previous or (content or "").strip(), base_target)
         return {"status": "ignored", "reason": "unknown action %r" % action}
+
+    def _remove_facts(self, needle, base_target):
+        """Remove by EXACT identity first (dedupe hash of the needle OR the per-entry
+        target). A needle that matches nothing falls back to a substring sweep with an
+        HONEST report (what went, how many, which match) — never a silent no-op. Every
+        delete prunes facts_vec (its rowid IS the fact id it indexes — stale vectors on a
+        re-used id would hand back the WRONG embedding)."""
+        needle = (needle or "").strip()
+        if not needle:
+            return {"status": "not_found", "needle": needle, "match": "none",
+                    "removed": 0, "rows": []}
+        assert self._db is not None
+        needle_hash = hashlib.sha256(needle.encode("utf-8")).hexdigest()
+        precise_target = "%s#%s" % (base_target, needle_hash[:8])
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, target, content FROM facts WHERE hash=? OR target=?",
+                (needle_hash, precise_target)).fetchall()
+            match, gone = "exact", [(r[0], r[1], r[2]) for r in rows]
+            if not gone:
+                rows = self._db.execute(
+                    "SELECT id, target, content FROM facts WHERE instr(content, ?) > 0",
+                    (needle,)).fetchall()
+                match, gone = "substring", [(r[0], r[1], r[2]) for r in rows]
+            if gone:
+                self._db.executemany("DELETE FROM facts WHERE id=?", [(i,) for i, _t, _c in gone])
+                self._prune_facts_vec([i for i, _t, _c in gone])
+                self._fts_rebuild()      # cold path: rebuild after a batch delete
+                self._db.commit()
+        report_rows = [{"target": t or "base-db:%d" % i, "content": c[:80]}
+                       for i, t, c in gone]
+        if not gone:
+            return {"status": "not_found", "needle": needle, "match": match,
+                    "removed": 0, "rows": []}
+        return {"status": "removed", "needle": needle, "match": match,
+                "removed": len(gone), "rows": report_rows}
+
+    def _prune_facts_vec(self, ids):
+        """Vector cleanup at delete — the fix for fact-id reuse on stores created BEFORE
+        the AUTOINCREMENT schema (works on every existing store). Best-effort: the table
+        exists only where the vec engine ever initialized; there is no fact_id column —
+        the vec0 rowid IS the fact id."""
+        assert self._db is not None
+        if not ids:
+            return
+        if self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_vec'").fetchone():
+            self._db.executemany("DELETE FROM facts_vec WHERE rowid=?", [(i,) for i in ids])
 
     def on_session_end(self, messages, *, session_id=""):
         """No automated consolidation here (the dreaming lesson is the project law)."""
@@ -388,8 +507,9 @@ class BaseDbBackend:
         assert self._db is not None or self._path is not None
         facts = pointers = None
         if self._db is not None:
-            f = self._db.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
-            p = self._db.execute("SELECT COUNT(*) FROM pointers").fetchone()[0]
+            with self._lock:               # shared connection — reads lock like the writes
+                f = self._db.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+                p = self._db.execute("SELECT COUNT(*) FROM pointers").fetchone()[0]
             facts, pointers = f, p
         return {"name": self.name, "best_for": self.best_for, "limits": self.limits,
                 "search": list(self.card_modes()), "write": self.writeable,

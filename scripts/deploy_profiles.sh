@@ -10,7 +10,8 @@ for a in "$@"; do
   echo "DRY: rsync $SRC -> $dst"   # Copy statt Symlink: Profil-Isolation (R2-A-8)
   if [ "$LIVE" = 1 ]; then
     mkdir -p "$HOME/.hermes/profiles/$a/plugins"
-    rsync -a --exclude .git --exclude tests --exclude .pytest_cache --exclude __pycache__ "$SRC/" "$dst/"
+    rsync -a --exclude .git --exclude tests --exclude docs --exclude .pytest_cache \
+      --exclude __pycache__ "$SRC/" "$dst/"
     echo "DEPLOYED: $dst"
   fi
 done
