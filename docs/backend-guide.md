@@ -17,6 +17,11 @@ is optional sugar — it pre-builds the fts5/lock/degrade lessons of this suite.
 | `touch(ids)` | engine (optional) | heat counter, the report basis |
 | `export_backend()` at MODULE level | yes | what the registry instantiates |
 
+Hook fan-out: the provider runs every hook at EVERY rack member — keep hooks
+cheap and idempotent. Blocks merge non-empty + dedupe (blank-line join); a
+single hook result keeps its exact form, several results pack per
+`{backend: result}`; one member's failure is isolated (the others still run).
+
 ## 4 steps
 
 1. **Copy the template** `backends/_template.py` out of the repo, rename the class +
