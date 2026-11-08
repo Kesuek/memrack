@@ -52,7 +52,10 @@ results burn heat too (one commit per search, never per row).
 
 Every delete removes by EXACT identity first (dedupe hash OR the per-entry
 `builtin:<src>#<hash8>` target); a needle that matches nothing falls back to
-a substring sweep and reports what went, how many, and which match won.
+a contained substring search: ONE hit removes as before and reports what
+went, how many, and which match won — MULTIPLE hits delete NOTHING and
+return `status: ambiguous` with the candidates (id/target/snippet), so a
+short or partial needle can never swallow several rows in one sweep.
 Each delete also prunes the optional vector table:
 
 ```sql

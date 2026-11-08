@@ -39,6 +39,15 @@ The core reads/writes through its OWN `_norm_backends`; this stand is the
 toggle default's source for pure-seam callers (the mirrored-source note in
 each docstring)."""
 
+_SELF_NAME = "memrack"
+"""The provider's store name: the yaml block sits under `plugins.memrack`,
+the flat json store at `<hermes_home>/memrack/config.json` (the SAME
+computation the docking machine's `_home_root`+`_SELF` pair carries; the
+parity is the established law, pinned by tests on both existing modules)."""
+
+_DOCK_WANT_KEY = "dock_want"
+_DOCK_WANT_LAST_KEY = "dock_want_last"
+
 _TOGGLE_SUFFIX = "_in_rack"
 
 
@@ -305,6 +314,157 @@ def dock_want_field(offers):
     }
 
 
+def _store_home(hermes_home=None):
+    """$HERMES_HOME resolution — the SAME fallback `_docked_dir` applies.
+    Both config stores hang beside this root, so the consumption helpers
+    keep one path computation (the machine's `_home_root` parity)."""
+    if hermes_home:
+        return Path(hermes_home)
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def _write_yaml_store_key(home, clear_key, last_key, last):
+    """Replace ONE consumed key with its one-shot receipt in the yaml store
+    (`plugins.<plugin>` block) — the provider core's dual save write
+    discipline mirrored (the docking machine's `_write_yaml_block_key`
+    shape): merge per key, atomic tmp sibling in the same directory,
+    os.replace, file 0600. Fail-closed: an unreadable or non-mapping root is
+    NEVER rewritten (that would clobber the host config) — {'file',
+    'changed'} on success, {'file', 'error'} on refusal."""
+    import yaml
+    path = home / "config.yaml"
+    root = {}
+    if path.exists():
+        root = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(root, dict):
+            return {"file": str(path), "error":
+                    "config.yaml carries no mapping — the yaml store is left "
+                    "untouched (never clobbers the host config)"}
+    plugins = root.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        root["plugins"] = plugins
+    block = plugins.get(_SELF_NAME)
+    if not isinstance(block, dict):
+        block = {}
+        plugins[_SELF_NAME] = block
+    consumed = block.get(clear_key)
+    block.pop(clear_key, None)
+    block[last_key] = dict(last)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(yaml.dump(root, default_flow_style=False,
+                             allow_unicode=True), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return {"file": str(path), "changed": True,
+            "consumed": str(consumed) if consumed is not None else None}
+
+
+def _write_flat_store_key(home, clear_key, last_key, last):
+    """Replace ONE consumed key with its one-shot receipt in the flat json
+    store `<home>/<plugin>/config.json` — the save write's flat-mirror half
+    (merge per key, atomic tmp sibling, os.replace, 0600). The desktop's
+    writer owns the file: a non-mapping body is left untouched fail-closed.
+    {'file', 'changed'} / {'file', 'error'}."""
+    import json as _json
+    path = home / _SELF_NAME / "config.json"
+    current = {}
+    if path.is_file():
+        current = _json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(current, dict):
+            return {"file": str(path), "error":
+                    "the flat json store carries no mapping — left untouched "
+                    "(the desktop's writer owns this file)"}
+    consumed = current.get(clear_key)
+    current.pop(clear_key, None)
+    current[last_key] = dict(last)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(current, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return {"file": str(path), "changed": True,
+            "consumed": str(consumed) if consumed is not None else None}
+
+
+def _consume_dock_want(config, choice, receipt, hermes_home=None):
+    """The one-shot consumption of the `dock_want` choice (the receipt law).
+
+    A SUCCESS or a CONTROLLED refusal ends the select: the choice leaves
+    BOTH config stores (dual-mirror, atomic, 0600 — the provider core's save
+    discipline mirrored, never a host-config clobber) and the PASSED live
+    config, so no later initialize re-runs the same probe over a stale
+    select. The outcome stays visible as `dock_want_last` {provider,
+    outcome, at} in both stores (additive on the status read-side). An
+    UNKNOWN outcome (a receipt that carries neither refused/error nor
+    status) consumes nothing — the choice persists for an honest retry.
+    A failed store write is fail-closed too: the files still carry the
+    choice, so the live view keeps it (never a silent 'it is cleared'
+    promise) and the returned receipt names the failure.
+
+    Returns the receipt (a copy; success/control refusals gain the additive
+    `consumed` marker and the per-store write report)."""
+    if not isinstance(receipt, dict) or not (receipt.get("refused")
+                                             or receipt.get("error")
+                                             or receipt.get("status")):
+        import logging
+        logging.getLogger("memrack.config_surface").warning(
+            "memrack dock_want %r: unconsumable receipt %r — the select "
+            "stays set (honest retry next initialize)", choice, receipt)
+        return receipt
+    outcome = ("refused" if (receipt.get("refused") or receipt.get("error"))
+               else str(receipt.get("status") or "unknown"))
+    last = {"provider": choice, "outcome": outcome, "at": _utcnow_iso()}
+    home = _store_home(hermes_home)
+    stores = {"name": _DOCK_WANT_KEY, "consumed": choice, "outcome": outcome}
+    try:
+        stores["yaml"] = _write_yaml_store_key(
+            home, _DOCK_WANT_KEY, _DOCK_WANT_LAST_KEY, last)
+    except Exception as exc:
+        stores["yaml"] = {"error": "yaml store write failed: %s: %s"
+                                   % (type(exc).__name__, exc)}
+    try:
+        stores["json"] = _write_flat_store_key(
+            home, _DOCK_WANT_KEY, _DOCK_WANT_LAST_KEY, last)
+    except Exception as exc:
+        stores["json"] = {"error": "flat json store write failed: %s: %s"
+                                   % (type(exc).__name__, exc)}
+    errors = [store["error"] for store in (stores["yaml"], stores["json"])
+              if isinstance(store, dict) and store.get("error")]
+    if errors:
+        stores["error"] = "; ".join(errors)
+    out = dict(receipt)
+    if errors:
+        stores["note"] = "the files still carry the choice — it persists " \
+                         "(fail-closed, never a silent cleared promise)"
+        out["store_write"] = stores
+        import logging
+        logging.getLogger("memrack.config_surface").warning(
+            "memrack dock_want %r consumption: store write failed (%s)",
+            choice, stores["error"])
+        return out
+    if isinstance(config, dict):
+        config.pop(_DOCK_WANT_KEY, None)
+        config[_DOCK_WANT_LAST_KEY] = last   # the live view carries the receipt
+    stores["note"] = "choice cleared in both stores; the receipt rides " \
+                     "dock_want_last (visible on the status)"
+    out["consumed"] = True
+    out["store_write"] = stores
+    return out
+
+
 def dock_want_hook(config, hermes_home=None, docking=None, offers=None,
                    loader=None):
     """initialize()-consumption of dock_want (Addendum (2), sentence 2).
@@ -330,12 +490,22 @@ def dock_want_hook(config, hermes_home=None, docking=None, offers=None,
     untouched. The machine's receipt (or refusal report) is returned
     honestly — the caller decides the surfacing.
 
-    The one hook-level law (the same fail-closed family as the machine's
-    "a REVIEWED card is never overwritten"): a persisted choice whose dock
-    card is PARKED (the membership toggle's later, explicit decision) does
-    NOT re-dock — the honest refusal comes back and the card stays parked
-    (a stale select must not churn over an explicit park; restoring it is
-    the toggle's decision, or the select is cleared).
+    The receipt law (one-shot): a SUCCESS or a CONTROLLED refusal CONSUMES
+    the choice — it clears from both config stores (dual-mirror 0600,
+    atomic) and from the passed live config, so a stale select never
+    re-runs the same probe on the next initialize. The outcome stays
+    visible as `dock_want_last` {provider, outcome, at} in the stores (the
+    status surfaces it additively). The hook-level park law and the
+    dock-name law below are controlled refusals in exactly that sense
+    (the machine is never consulted; nothing is cleared twice).
+
+    Hook-level laws kept: the dock-name law (the machine's central
+    validator — a hostile select value never becomes a card path, the
+    refusal rides the machine's own error wording) and the park law (a
+    persisted choice whose dock card is PARKED does NOT re-dock — the
+    honest refusal comes back and the card stays parked; a stale select
+    must not churn over an explicit park) — see `_consume_dock_want` for
+    the store half.
     """
     choice = str((config or {}).get("dock_want") or "").strip()
     if not choice:
@@ -349,21 +519,29 @@ def dock_want_hook(config, hermes_home=None, docking=None, offers=None,
         try:
             machine.resolve_dock_path(choice, hermes_home=hermes_home)
         except machine.DockNameError as exc:
-            return {"provider": choice, "refused": True, "gap": "%s" % exc,
-                    "hint": "choose one of the machine's offers (dock list)"}
+            return _consume_dock_want(
+                config, choice,
+                {"provider": choice, "refused": True, "gap": "%s" % exc,
+                 "hint": "choose one of the machine's offers (dock list)"},
+                hermes_home=hermes_home)
     dock_dir = _docked_dir(hermes_home)
     for suffix in (".yaml", ".yml"):
         if (dock_dir / ("disabled-%s%s" % (choice, suffix))).exists():
-            return {"provider": choice, "refused": True,
-                    "gap": "the dock of %r is PARKED by the membership "
-                           "toggle (disabled-%s%s on file) — restoring it "
-                           "is the toggle's decision; dock_want was honored "
-                           "once and never re-docks over an explicit park"
-                           % (choice, choice, suffix),
-                    "hint": "toggle %s_in_rack back on, or clear the "
-                            "dock_want select" % choice}
-    return machine.dock(choice, probe=True, loader=loader, offers=offers,
-                        hermes_home=hermes_home)
+            return _consume_dock_want(
+                config, choice,
+                {"provider": choice, "refused": True,
+                 "gap": "the dock of %r is PARKED by the membership "
+                        "toggle (disabled-%s%s on file) — restoring it "
+                        "is the toggle's decision; dock_want was honored "
+                        "once and never re-docks over an explicit park"
+                        % (choice, choice, suffix),
+                 "hint": "toggle %s_in_rack back on, or clear the "
+                         "dock_want select" % choice},
+                hermes_home=hermes_home)
+    receipt = machine.dock(choice, probe=True, loader=loader, offers=offers,
+                           hermes_home=hermes_home)
+    return _consume_dock_want(config, choice, receipt,
+                              hermes_home=hermes_home)
 
 
 def pending_flags(card):

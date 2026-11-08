@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (273 tests green)
+## Status — v0.7.0 (284 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -54,7 +54,8 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       answer carries the rack cards as an additive `cards` slot — rebuilt per
       call from the live rack, never a stale init snapshot
 - [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked) —
-      now with a page search engine (`WikiIndex`, stdlib-only: mtime-diff pass, L<n>-targets, snippets)
+      now with a page search engine (`WikiIndex`, stdlib-only: stat-first
+      mtime/size pass — unchanged pages are never read —, L<n>-targets, snippets)
 - [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, incremental embed pass,
       honest degrade (fts-only + gap note) when the env lacks it
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
@@ -108,6 +109,8 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       (built-ins fold into `enabled_backends`, docked cards park/unpark via
       the card file); a set `dock_want` choice runs the docking machine's
       probe flow at the next initialize (no auto-dock, the user decides)
+      and is CONSUMED after it — success or controlled refusal clears the
+      select from both stores; the receipt stays visible as `dock_want_last`
 - [x] pending-confirmation flow: a PROPOSED (draft) dock card carries
       `pending_confirmation: true` + a `pending_hint` on every card surface
       (status + search/write answers); the chat confirm lands via the
@@ -150,7 +153,11 @@ toggled off, wiki stays parked-by-default); toggling a docked card
 parks/restores its card FILE under the `disabled-` prefix. A set `dock_want`
 choice runs the docking machine's probe flow (isolated probe → draft card +
 binding shim) at the NEXT `initialize()` — an explicit user decision, no
-auto-dock.
+auto-dock. The choice is CONSUMED in that initialize (one-shot receipt): a
+success OR a controlled refusal clears the select from both stores (0600,
+atomic) and the live config, so no later initialize re-runs the same probe;
+the outcome stays visible as `dock_want_last` {provider, outcome, at}
+(`memrack_status` carries it additively).
 
 The DECLARED desktop panel (gear → Plugins → memrack) carries the SAME
 family (import-derived `config_schema.py`): the five remaining static

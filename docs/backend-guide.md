@@ -47,6 +47,21 @@ gated), the prefetch rail is the rack's one fusion fan-out (automatic,
 availability-gated — NOT an opt-in), and the tool mirror + system block
 follow the card's recorded decisions.
 
+### The dock_want select is consumed (one-shot receipt)
+
+A choice set on the `dock_want` select (gear pane or wizard) runs the
+machine's probe flow at the NEXT `initialize()` — and then the select ENDS:
+a success OR a controlled refusal (unknown/failed provider, dock-name
+refusal, parked card) clears `dock_want` from BOTH stores
+(`plugins.memrack` in `config.yaml` + the flat json `<hermes_home>/memrack/
+config.json` — merge per key, atomic tmp sibling, 0600, the host config
+never clobbered) and from the live config, so no later initialize re-runs
+the same probe over a stale select. The outcome stays visible as
+`dock_want_last` {provider, outcome, at} in both stores — `memrack_status`
+carries it additively (an absent receipt stays absent). A failed store
+write is fail-closed: the files still carry the choice, so it persists for
+an honest retry and the receipt names the write error.
+
 ### The dock-name law (every name-built path, one validator)
 
 Card/provider names are lowercase dashes, underscores and digits —
@@ -195,7 +210,9 @@ that actually derives modes replaces them).
    loses the heat tiebreak silently against base-db. Conformance warns.
 3. **target identifies the ENTRY, not the file** — the RRF collapse merges by
    target; a collective target would swallow N−1 of your hits. Import/one-shot
-   loads suffix per entry (hash8).
+   loads suffix per entry (hash8). Targetless hits fall back to a
+   `backend:content` key: identical content out of DIFFERENT backends stays
+   separate pool entries (the backend identity never collapses).
 4. **Subclassing the ABC via a mixin: mixin base FIRST** —
    `class Bound(MixinBase, MemoryProvider)` — the ABC-first order shadows
    implementations with declarations (the MRO-shadow lesson, proven live).

@@ -5,8 +5,13 @@ The `wiki` backend keeps NO database. It wraps an existing markdown wiki
 
 ## Index model
 
-- **Cache:** `{relative_path: (mtime, text)}` in RAM. A `rescan()` mtime-diff
-  pass re-reads only changed files (logged: N pages, M changed).
+- **Cache:** `{relative_path: (mtime, size, text)}` in RAM. A `rescan()` pass
+  is STAT-FIRST: every page is stat()ed and only a page whose mtime/size
+  differs from its index entry is re-read (unchanged pages are never read);
+  a deleted page drops out of the index (tombstone, honestly counted). The
+  pass returns the number of index changes (new + changed + deleted) and
+  the breakdown ({new, changed, deleted, reads}) rides `last_rescan`
+  (logged: N pages, M new, M changed, M deleted, M reads).
 - **Hits:** `kind=page`, `target = wiki:<relative-path>:L<first-match-line>`
   — the target identifies ONE entry (the RRF collapse law), `snippet` carries
   the matching 3-line window.

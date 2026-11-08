@@ -434,10 +434,14 @@ class BaseDbBackend:
 
     def _remove_facts(self, needle, base_target):
         """Remove by EXACT identity first (dedupe hash of the needle OR the per-entry
-        target). A needle that matches nothing falls back to a substring sweep with an
-        HONEST report (what went, how many, which match) — never a silent no-op. Every
-        delete prunes facts_vec (its rowid IS the fact id it indexes — stale vectors on a
-        re-used id would hand back the WRONG embedding)."""
+        target). A needle that matches nothing falls back to a substring search
+        with an HONEST report (what went, how many, which match) — never a
+        silent no-op. The containment law keeps the fallback SAFE: ONE
+        substring hit removes as before; MULTIPLE hits remove NOTHING and
+        return `status: ambiguous` with the candidates (id/target/snippet)
+        for a targeted choice. Every delete prunes facts_vec (its rowid IS
+        the fact id it indexes — stale vectors on a re-used id would hand
+        back the WRONG embedding)."""
         needle = (needle or "").strip()
         if not needle:
             return {"status": "not_found", "needle": needle, "match": "none",
@@ -454,7 +458,18 @@ class BaseDbBackend:
                 rows = self._db.execute(
                     "SELECT id, target, content FROM facts WHERE instr(content, ?) > 0",
                     (needle,)).fetchall()
-                match, gone = "substring", [(r[0], r[1], r[2]) for r in rows]
+                match = "substring"
+                gone = [(r[0], r[1], r[2]) for r in rows]
+                if len(gone) > 1:
+                    # the containment law: a short or partial needle must
+                    # never swallow several rows in one sweep — the fallback
+                    # stays a CANDIDATE search, nothing is deleted and the
+                    # callers get the targeted picks (id/target/snippet)
+                    candidates = [{"id": i, "target": t or "base-db:%d" % i,
+                                   "snippet": c[:80]} for i, t, c in gone]
+                    return {"status": "ambiguous", "needle": needle,
+                            "match": "substring", "removed": 0, "rows": [],
+                            "candidates": candidates}
             if gone:
                 self._db.executemany("DELETE FROM facts WHERE id=?", [(i,) for i, _t, _c in gone])
                 self._prune_facts_vec([i for i, _t, _c in gone])

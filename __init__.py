@@ -1398,7 +1398,12 @@ class _MemrackBase:
             for hit in hits:
                 target = hit.get("target")
                 if target is None or str(target).strip() == "":
-                    key = "content:%s" % (hit.get("content") or "")
+                    # the fallback key keeps the BACKEND identity: identical
+                    # content out of DIFFERENT backends must not collapse
+                    # into one pool entry (the printf-pitfall law: branch
+                    # first, then format — never feed a raw None into %s)
+                    key = "%s:content:%s" % (str(hit.get("backend") or ""),
+                                             hit.get("content") or "")
                 else:
                     key = "%s:%s" % (hit.get("backend"), target)
                 entry = pool.setdefault(key, {
@@ -1598,6 +1603,13 @@ class _MemrackBase:
         receipt = getattr(self, "_dock_want_outcome", None)
         if receipt is not None:
             out["dock_want_receipt"] = receipt
+        # the one-shot receipt law (read-side): the consumed `dock_want`
+        # rides only as `dock_want_last` {provider, outcome, at} — the
+        # additive slot keeps the last outcome visible after the select
+        # itself left both stores (an absent receipt stays absent).
+        last = (self._config or {}).get("dock_want_last")
+        if isinstance(last, dict) and last.get("provider"):
+            out["dock_want_last"] = dict(last)
         out.update({
             "backends": sorted(self._rack),
             "gap_list": self._gaps,

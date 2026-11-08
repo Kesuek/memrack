@@ -33,9 +33,10 @@ class WikiIndex:
     def __init__(self, root, session_id=""):
         self._root = Path(str(root or (Path.home() / "wiki" / "main")))
         self._session_id = session_id
-        self._index: dict = {}   # rel_path -> (mtime, text)
+        self._index: dict = {}   # rel_path -> (mtime, size, text)
         self._lock = threading.RLock()   # REENTRANT: search() holds it and calls rescan()
         self._started = False
+        self.last_rescan: dict = {}   # the honest per-pass breakdown
         self.rescan()   # index built once per start (session-start pass)
         self._started = True
 
@@ -48,27 +49,51 @@ class WikiIndex:
         return len(self._index)
 
     def rescan(self) -> int:
-        """Index-Refresh-Pass: new/changed pages in, deleted out. Returns change count."""
+        """Index-Refresh-Pass, STAT-FIRST: every page is stat()ed and only a
+        page whose mtime/size differs from its index entry is READ — unchanged
+        pages keep their cached entry (never a read). A page whose file left
+        the tree is a tombstone: out of the index, honestly counted. Returns
+        the number of index changes (new + changed + deleted); the per-pass
+        breakdown ({new, changed, deleted, reads}) lands in `last_rescan`."""
         if not self._root.is_dir():
             self._index = {}
+            self.last_rescan = {"new": [], "changed": [], "deleted": [],
+                                "reads": 0}
             return 0
-        fresh, changed = {}, 0
+        fresh = {}
+        new_pages, changed_pages = [], []
+        reads = 0
         for md in self._root.rglob("*.md"):
             rel = str(md.relative_to(self._root))
             try:
-                mtime = md.stat().st_mtime
+                st = md.stat()          # stat FIRST — the read is the expensive half
+                mtime, size = st.st_mtime, st.st_size
+            except OSError:
+                continue               # vanished between glob and stat — next pass
+            cached = self._index.get(rel)
+            if cached is not None and cached[0] == mtime and cached[1] == size:
+                fresh[rel] = cached    # unchanged — the cached text rides, no read
+                continue
+            try:
                 text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            cached = self._index.get(rel)
-            if cached is None or cached[0] != mtime:
-                changed += 1
-            fresh[rel] = (mtime, text)
+            reads += 1
+            (new_pages if cached is None else changed_pages).append(rel)
+            fresh[rel] = (mtime, size, text)
+        # tombstones: every indexed rel path whose file left the tree drops out
+        deleted = [rel for rel in self._index if rel not in fresh]
         with self._lock:
             self._index = fresh
-        if changed:
-            _LOG.info("memrack wiki index: %d pages, %d changed", len(fresh), changed)
-        return changed
+            self.last_rescan = {"new": sorted(new_pages),
+                                "changed": sorted(changed_pages),
+                                "deleted": sorted(deleted), "reads": reads}
+        total = len(new_pages) + len(changed_pages) + len(deleted)
+        if total:
+            _LOG.info("memrack wiki index: %d pages (%d new, %d changed, "
+                      "%d deleted), %d page reads", len(fresh), len(new_pages),
+                      len(changed_pages), len(deleted), reads)
+        return total
 
     def search(self, query, mode, k, session_id=""):
         """Page hits per the retrieval tools.2: rank 1..k, AND-semantics over tokens, title boost."""
@@ -82,7 +107,7 @@ class WikiIndex:
             return []
         now_iso = _utcnow_iso()
         scored = []
-        for rel, (stored_mtime, text) in snapshot.items():
+        for rel, (stored_mtime, _size, text) in snapshot.items():
             try:
                 ts = datetime.fromtimestamp(stored_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             except (TypeError, ValueError, OSError):
