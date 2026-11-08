@@ -470,13 +470,18 @@ def draft_card(provider_name, probe_report):
 
 def _atomic_write(path, text, *, mode=0o600):
     """Write ATOMICALLY (tmp in the same directory, then os.replace) — the
-    same discipline the provider core applies to its config writers; 0600."""
+    same discipline the provider core applies to its config writers. Docking
+    artifacts are PRIVATE card data: file 0600, the card directory 0700."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / (path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(text)
     try:
         os.chmod(tmp, mode)
+    except OSError:
+        pass
+    try:
+        os.chmod(path.parent, 0o700)
     except OSError:
         pass
     os.replace(tmp, path)
@@ -513,7 +518,7 @@ def write_draft_card(provider_name, probe_report, *, hermes_home=None):
         "module": PROXY_BACKEND_MODULE,
         "adapter_path": str(adapter_path),
     }
-    _atomic_write(shim_path, shim, mode=0o644)
+    _atomic_write(shim_path, shim, mode=0o600)
     return {"file": str(card_path), "shim": str(shim_path), "card": card}
 
 

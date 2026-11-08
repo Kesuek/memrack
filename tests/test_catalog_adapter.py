@@ -467,6 +467,11 @@ def test_dock_probe_writes_draft_card_with_placeholders(tmp_path):
     assert card["evidence"]["probed_at"], card
     assert card["evidence"]["provider_version"] == fake.plugin_version
     assert card["mirror_tools"]["fake_1"] == "memrack__fakesvc__fake_1"
+    # the docking artifacts are PRIVATE card data (0600 pair, 0700 dir)
+    assert (card_path.stat().st_mode & 0o777) == 0o600, "the card file is 0600"
+    shim_path = tmp_path / "plugins" / "memrack" / "backends.d" / "fakesvc.py"
+    assert (shim_path.stat().st_mode & 0o777) == 0o600, "the binding shim is 0600"
+    assert (shim_path.parent.stat().st_mode & 0o777) == 0o700, "the dock dir is 0700"
     # presence semantics: the card file in backends.d IS the registry input
     dock = MR.docked_dir(str(tmp_path))
     assert [p.name for p in dock.glob("*.yaml")] == ["fakesvc.yaml"]
