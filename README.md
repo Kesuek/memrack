@@ -1,6 +1,7 @@
 # memrack
 
-One provider slot, many memory backends.
+One provider slot, many memory backends; installed catalog memory providers can
+dock into the rack instead of replacing it.
 
 ## The problem
 
@@ -29,8 +30,13 @@ have.
   pip entry points come later (v0.5+)
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
+- installed **catalog memory providers can dock into the rack** (`memrack dock
+  <provider> [--probe]`): memrack mirrors the provider's ABC — recall fuses into
+  ONE prefetch block, the static prompt block concats behind an origin line, the
+  provider's tools surface mirrored under memrack-namespace names — the provider
+  never talks to the host directly
 
-## Status — v0.5.0 (148 tests green)
+## Status — v0.5.0 (180 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -63,6 +69,18 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       history (`state.db`, mode=ro, no copies, no triggers), default ON
 - [x] provider CLI: `hermes memrack status|report|export|import` — the heat
       report (hot facts, never-read count) is the curation basis; surfaces only when active
+- [x] catalog-provider docking (the `memrack_dock` tool + `hermes memrack dock
+      list|show|probe|refresh|remove`): installed, INACTIVE catalog memory providers
+      are OFFERED (never auto-docked); `--probe` instantiates the provider class in
+      isolation, proves the MemoryProvider-ABC, classifies per provider (tool-centric
+      or prefetch-only — the probe outcome is the truth), and writes a DRAFT card +
+      per-provider binding shim into `backends.d/` (presence semantics) with probe
+      evidence (timestamp + provider version) for the drift recheck (`--refresh`:
+      version change → revision note; a REVIEWED card is never overwritten). Mirror
+      names follow the 64-cap chain (`memrack__<provider>__<tool>` → `mr__<p>__<t>`
+      → `mr__<p>__<t>__<hash4>`, deterministic/restart-stable, collisions fail
+      closed) and always sit on the `memrack_status` cards; `best_for`/`limits`
+      stay HUMAN-authored (draft placeholders)
 - [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
 

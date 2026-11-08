@@ -9,6 +9,8 @@ Subcommands:
   report    — the heat report: hot facts, never-read facts, pointers (Kuratur basis)
   export    — full JSON dump of the base-db store (facts + pointers) — backup/migration
   import    — the legacy import job (builtin memory → fact rows; deterministic, idempotent)
+  dock      — catalog-provider docking machine: list offers/dock cards, dock <provider>
+              [--probe] (probe → draft card), --refresh (drift-recheck), show/remove
 """
 
 from __future__ import annotations
@@ -35,7 +37,9 @@ _SUBCOMMAND_HELP = (
     ("status", "rack inventory: backends with card, active/gaps/parked/pending-docks"),
     ("report", "heat report: hot top-10 + never-read facts + pointer counts"),
     ("export", "full JSON dump of the base-db store (facts + pointers)"),
-    ("import", "legacy import job (builtin memory → fact rows, idempotent)"))
+    ("import", "legacy import job (builtin memory → fact rows, idempotent)"),
+    ("dock", "catalog-provider docking machine: list offers/cards, "
+             "dock <provider> [--probe|--refresh], show/remove"))
 
 
 def register_cli(parser: argparse.ArgumentParser) -> None:
@@ -49,13 +53,88 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
         if name == "import":
             sub.add_argument("--source", choices=("memory", "user", "both"), default="both",
                              help="legacy source (default: both)")
+        if name == "dock":
+            sub.add_argument("verb", nargs="?", default="list",
+                             help="list (default) | show | remove | probe | refresh "
+                                  "| <provider> (= an offer only, unless --probe)")
+            sub.add_argument("item", nargs="?", default=None,
+                             help="<provider> for show/remove; `dock <provider>` "
+                                  "otherwise")
+            sub.add_argument("--probe", action="store_true",
+                             help="run the isolated probe and write the draft card")
+            sub.add_argument("--refresh", action="store_true",
+                             help="drift-recheck the card against the installed "
+                                  "provider version")
         sub.set_defaults(func=_run)
+
+
+def _docking(home=None):
+    """The docking machine module, spec-path resolved beside THIS file and cached
+    one-copy per process (the CLI imports ONLY this file at argparse setup — the
+    machine itself loads lazily at call time, the same active-provider contract)."""
+    import importlib.util
+    import pathlib
+    import sys
+    mod = sys.modules.get("memrack_cli_docking")
+    if mod is None:
+        path = pathlib.Path(__file__).resolve().parent / "memrack" / "docking.py"
+        spec = importlib.util.spec_from_file_location("memrack_cli_docking", str(path))
+        if spec is None or spec.loader is None:
+            raise ImportError("dock machine not resolvable beside cli.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["memrack_cli_docking"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def _provider_required(action, item):
+    _print({"error": "provider required for %r" % action,
+            "hint": "hermes memrack dock %s <provider>" % action})
+    return 1
+
+
+def _run_dock(args, home) -> int:
+    docking = _docking(home)
+    verb = (args.verb or "list").strip()
+    item = (args.item or "").strip()
+    if verb in ("show", "remove", "probe", "refresh") and not item:
+        return _provider_required(verb, item)
+    if verb == "list":
+        if args.probe or args.refresh:
+            _print({"error": "--probe/--refresh need a provider",
+                    "hint": "hermes memrack dock <provider> --probe"})
+            return 1
+        _print(docking.dock_list(hermes_home=home))
+    elif verb == "show":
+        _print(docking.dock_show(item, hermes_home=home))
+    elif verb == "remove":
+        _print(docking.dock_remove(item, hermes_home=home))
+    elif verb == "probe":
+        _print(docking.dock(item, probe=True, hermes_home=home))
+    elif verb == "refresh":
+        _print(docking.dock(item, refresh=True, hermes_home=home))
+    elif item:
+        _print({"error": "too many arguments (%r, %r)" % (verb, item),
+                "hint": "hermes memrack dock [list|show|remove|probe|refresh] "
+                        "[<provider>] — or `dock <provider> [--probe]`"})
+        return 1
+    else:
+        _print(docking.dock(verb, probe=args.probe, refresh=args.refresh,
+                            hermes_home=home))
+    return 0
 
 
 def _run(args) -> int:
     from hermes_constants import get_hermes_home
 
     home = get_hermes_home()
+    if args.sub == "dock":    # the docking machine needs no provider load
+        try:
+            return _run_dock(args, home)
+        except Exception as e:
+            _print({"error": f"memrack dock failed: {type(e).__name__}: {e}",
+                    "hint": "the machine is fail-closed — nothing was docked"})
+            return 1
     try:
         p = _provider(home)
     except Exception as e:  # fail with an actionable message, not a traceback wall

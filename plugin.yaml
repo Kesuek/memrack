@@ -1,5 +1,5 @@
 name: memrack
-capabilities: [tools.override]   # mounts memrack_search/write/status/import (no overrides of builtin tools!)
+capabilities: [tools.override]   # mounts memrack_search/write/status/import/dock (no overrides of builtin tools!)
 version: 0.5.0
 description: "memrack — one provider slot, many memory backends: agent-routed writes over dockable cards, fan-out retrieval with RRF merge, bridge-style manifest docking."
 author: Kesuek

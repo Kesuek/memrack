@@ -22,6 +22,26 @@ cheap and idempotent. Blocks merge non-empty + dedupe (blank-line join); a
 single hook result keeps its exact form, several results pack per
 `{backend: result}`; one member's failure is isolated (the others still run).
 
+## Catalog docks (mirror-not-rebuild)
+
+An INSTALLED, INACTIVE catalog memory provider docks through the docking
+machine — NOT by writing a backend: `memrack dock <provider> --probe`
+(= the `memrack_dock` tool, action=probe) instantiates the provider class in
+isolation, proves the MemoryProvider-ABC and writes a DRAFT card + per-provider
+binding shim into `backends.d/` (presence semantics: registered next session).
+The provider never talks to the host directly — memrack mirrors it: recall
+enters the ONE prefetch fusion, the static block concats behind an origin
+line, its tools surface UNDER THE MEMRACK NAMESPACE by the 64-cap name chain
+(`memrack__<p>__<t>` → `mr__<p>__<t>` → `mr__<p>__<t>__<hash4>`,
+deterministic + restart-stable; the effective names always sit on the
+`memrack_status` cards). If YOUR backend exposes `tool_schemas`, the mirror
+law applies to you too: ONE effective name claimed twice = conformance abort
+(fail-closed collision, nothing is silently deduplicated). Decisions
+(mirror on/off, write-forwards) are CARD data — recorded keys act, absent
+keys fail closed; `best_for`/`limits` stay human-authored (draft
+placeholders), and no probe ever overwrites a reviewed card — `--refresh`
+re-derives from a fresh probe on a provider version change instead.
+
 ## 4 steps
 
 1. **Copy the template** `backends/_template.py` out of the repo, rename the class +

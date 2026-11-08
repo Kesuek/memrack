@@ -97,6 +97,23 @@ _BACKEND_METHODS = (
 )
 _BACKEND_OPTIONAL = ("search", "write", "touch", "tool_schemas", "handle_tool_call")
 
+# A mirrored docked tool never carries the provider's original name across the
+# host boundary (the mirror law); the sentinel marks "no mirrored claim" in
+# the dispatch lookup.
+_MIRROR_MISS = object()
+
+
+def _schema_name(schema):
+    """The tool name of ONE tool-schema dict, in EITHER ABC shape (function-
+    wrapped {"type": "function", "function": {"name": ...}} or the flat
+    {"name": ...} form); None when the dict carries no name."""
+    if not isinstance(schema, dict):
+        return None
+    function = schema.get("function")
+    if isinstance(function, dict):
+        return function.get("name")
+    return schema.get("name")
+
 
 def ensure_backend(obj, origin: str):
     """Validate the docking contract; a miss raises TypeError (registry skips it)."""
@@ -178,7 +195,7 @@ def _card(backend) -> dict:
              else (declared or tuple(getattr(backend, "search_modes", ()))) )
     best_for = man.get("best_for") or getattr(backend, "best_for", "")
     lim = man.get("limits") or getattr(backend, "limits", "")
-    return {
+    out = {
         "name": backend.name,
         "best_for": best_for,
         "limits": lim,
@@ -189,6 +206,15 @@ def _card(backend) -> dict:
         "origin": (man.get("module") or "code") if man else "code",
         "declared": sorted(set(declared) - set(modes)),   # manifest promise WITHOUT delivery (env)
     }
+    if man:   # catalog-dock additions (sparse, additive only): the mirrored
+        # effective tool names (the Namensgesetz duty — they always sit on the
+        # status card) and the draft marker until the human review ran.
+        mirrors = man.get("mirror_tools")
+        if isinstance(mirrors, dict) and mirrors:
+            out["mirrored_tools"] = dict(mirrors)
+        if man.get("draft"):
+            out["draft"] = True
+    return out
 
 
 def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
@@ -481,6 +507,13 @@ class _MemrackBase:
         rack = getattr(self, "_rack", None) or {}
         return {n: _card(b) for n, b in rack.items()}
 
+    def _gap_once(self, backend, error):
+        """Append a gap entry ONCE (assembly paths may run per call; duplicate
+        honest notes are noise, not signal). Entry shape = the init-gap shape."""
+        entry = {"backend": backend, "error": error}
+        if entry not in self._gaps:
+            self._gaps.append(entry)
+
     # ── routing bookkeeping ──
     def _routed_for_kind(self, kind: str):
         """Source-rule routing (deterministic, no content judgement):
@@ -534,6 +567,26 @@ class _MemrackBase:
         out = backend.on_memory_write(action, target, content, metadata=metadata,
                                       session_id=session_id or self._session_id)
         self._log_route("memory_write:%s" % action, str(target), backend.name)
+        # catalog docks with a RECORDED forward decision receive the write
+        # mirror too (the docking machine only records it when the write
+        # semantics are compatible; docks whose card says nothing receive
+        # nothing — fail-closed). The routed receipt stays THE answer; a
+        # failing mirror forward is logged, never merged into it.
+        for bname, member in list(self._rack.items()):
+            if member is backend:
+                continue
+            man = getattr(member, "manifest", None)
+            if not isinstance(man, dict) or not _truthy(man.get("forward_writes")):
+                continue
+            fn = getattr(member, "on_memory_write", None)
+            if not callable(fn):
+                continue
+            try:
+                fn(action, target, content, metadata=metadata,
+                   session_id=session_id or self._session_id)
+            except Exception as exc:
+                _LOG.warning("memrack memory-write forward to %s failed: %s",
+                             bname, exc)
         return out
 
     # ── provider hooks (T-031, decision (a): fan-out over the whole rack) ──
@@ -687,6 +740,29 @@ class _MemrackBase:
                 if fname and fname not in seen:
                     seen.add(fname)
                     schemas.append(schema)
+            # catalog docks (mirror-not-rebuild): a docked provider's TOOL schemas
+            # surface on the rack under their MIRRORED memrack-namespace names —
+            # the provider's original tool names never reach the host (mirror law).
+            for bname, backend in (self._rack or {}).items():
+                if self._active is backend:
+                    continue
+                prop = getattr(backend, "tool_schemas", None)
+                if not callable(prop):
+                    continue
+                try:
+                    member_schemas = list(prop() or [])
+                except Exception as exc:
+                    _LOG.warning("memrack backend %s tool mirror unreadable: %s",
+                                 bname, exc)
+                    self._gap_once(bname, "tool mirror unreadable: %s: %s"
+                                   % (type(exc).__name__, exc))
+                    continue
+                for schema in member_schemas:
+                    sname = _schema_name(schema)
+                    if not sname or sname in seen:
+                        continue
+                    seen.add(sname)
+                    schemas.append(schema)
         our = {
             "memrack_search": {
                 "type": "object", "properties": {
@@ -716,6 +792,15 @@ class _MemrackBase:
                                "enum": ["memory", "user", "both"], "default": "both"},
                 }, "required": [], "additionalProperties": False,
             },
+            "memrack_dock": {
+                "type": "object", "properties": {
+                    "action": {"type": "string",
+                               "enum": ["list", "offer", "show", "probe",
+                                        "refresh", "remove"],
+                               "default": "list"},
+                    "provider": {"type": "string"},
+                }, "required": [], "additionalProperties": False,
+            },
         }
         for name, params in our.items():
             if name not in seen:
@@ -733,13 +818,114 @@ class _MemrackBase:
             return self._tool_write(args)
         if tool_name == "memrack_import":
             return self._tool_import(args)
+        if tool_name == "memrack_dock":
+            return json.dumps(self._tool_dock(args), indent=2, ensure_ascii=False)
         if tool_name == self._status_tool_name():
             return json.dumps(self.status(), indent=2, ensure_ascii=False)
+        # mirrored catalog tools: dispatch by the effective name the dock
+        # registered — the provider never sees the host speak its original
+        # name (the mirror law); unknown names fall through to KeyError.
+        mirrored = self._mirrored_dispatch(tool_name, args, **kwargs)
+        if mirrored is not _MIRROR_MISS:
+            return mirrored
         if self._active is not None:
             fn = getattr(self._active, "handle_tool_call", None)
             if fn is not None:
                 return fn(tool_name, args, **kwargs)
         raise KeyError("unknown memrack tool %r" % tool_name)
+
+    # ── catalog-dock mirror dispatch + docking surface (mirror-not-rebuild) ──
+
+    def _mirrored_index(self):
+        """{effective mirrored tool name: backend} from the LIVE rack, rebuilt
+        on call (no stale index — the cards' law). A name claimed by TWO
+        backends is registered as the AMBIGUOUS marker: dispatch refuses it
+        (fail-closed, no winner picks) and a gap note names both claimants."""
+        index = {}
+        for bname, backend in (self._rack or {}).items():
+            prop = getattr(backend, "tool_schemas", None)
+            if not callable(prop):
+                continue
+            try:
+                member_schemas = list(prop() or [])
+            except Exception as exc:
+                _LOG.warning("memrack backend %s tool mirror unreadable: %s",
+                             bname, exc)
+                self._gap_once(bname, "mirrored tools unreadable: %s: %s"
+                               % (type(exc).__name__, exc))
+                continue
+            for schema in member_schemas:
+                sname = _schema_name(schema)
+                if not sname:
+                    continue
+                current = index.get(sname)
+                if current is not None and current is not backend:
+                    index[sname] = None
+                    self._gap_once(bname,
+                                   "mirrored tool name collision: %r claimed by "
+                                   "both %s and %s — dispatch refuses (fail-closed)"
+                                   % (sname, getattr(current, "name", "?"), bname))
+                elif sname not in index:
+                    index[sname] = backend
+        return index
+
+    def _mirrored_dispatch(self, tool_name, args, **kwargs):
+        """Route ONE call by its effective mirrored name to the docked
+        provider. Unknown names return the MISS sentinel (the caller carries
+        on); collisions/ambiguities return an honest error — never a
+        guessed tool or a winner pick."""
+        entry = self._mirrored_index().get(str(tool_name or ""))
+        if entry is None:
+            return _MIRROR_MISS
+        backend = entry
+        self._log_route("mirrored_tool", str(tool_name),
+                        getattr(backend, "name", "?"))
+        return backend.handle_mirrored_call(str(tool_name), args, **kwargs)
+
+    def _docking_module(self):
+        """The docking machine, spec-path resolved beside THIS file (one copy
+        per process, cached in sys.modules) — no package import needed."""
+        import importlib.util
+        import sys
+        mod = sys.modules.get("memrack_docking_core")
+        if mod is None:
+            spec = importlib.util.spec_from_file_location(
+                "memrack_docking_core",
+                Path(__file__).resolve().parent / "memrack" / "docking.py")
+            if spec is None or spec.loader is None:
+                raise ImportError("dock machine not resolvable beside the provider")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["memrack_docking_core"] = mod
+            spec.loader.exec_module(mod)
+        return mod
+
+    def _tool_dock(self, args):
+        """`memrack dock` on the tool surface: list/offer/probe/show/refresh/
+        remove — the SAME machine `hermes memrack dock <sub>` drives (one
+        backend, two surfaces). Everything it does is EXPLICIT (no auto-dock)."""
+        action = str(args.get("action") or "list").strip().lower()
+        provider = str(args.get("provider") or "").strip()
+        docking = self._docking_module()
+        if action == "list":
+            return docking.dock_list(hermes_home=self._hermes_home)
+        if not provider:
+            return {"error": "provider required for action %r" % action,
+                    "hint": "actions: list (no args) | offer | probe | show | "
+                            "refresh | remove (+ provider)"}
+        if action == "offer":
+            return docking.dock(provider, hermes_home=self._hermes_home)
+        if action == "probe":
+            return docking.dock(provider, probe=True,
+                                hermes_home=self._hermes_home)
+        if action == "refresh":
+            return docking.dock(provider, refresh=True,
+                                hermes_home=self._hermes_home)
+        if action == "show":
+            return docking.dock_show(provider, hermes_home=self._hermes_home)
+        if action == "remove":
+            return docking.dock_remove(provider, hermes_home=self._hermes_home)
+        return {"error": "unknown dock action %r" % action,
+                "hint": "actions: list | offer | probe | show | refresh | remove"}
 
     # ── search: fan-out + ONE fusion rule (the fusion law) ──
     def _tool_search(self, args):
@@ -1037,6 +1223,12 @@ _TOOL_DESCRIPTIONS = {
                       "gaps (engines that degraded), parked/docking errors.",
     "memrack_import": "Import the builtin memory's legacy entries (MEMORY.md/USER.md, §-delimited) "
                       "as fact rows — idempotent via hash-dedupe. Migration job, once per profile.",
+    "memrack_dock": "The catalog-provider docking machine: list installed, inactive catalog memory "
+                    "providers that could dock into the rack, show existing dock cards (with the "
+                    "mirrored effective tool names), run the isolated probe (action=probe writes "
+                    "the draft card), refresh after a provider update (drift-recheck), or remove "
+                    "a dock. Listing/offering never docks anything — the user decides; writes go "
+                    "through an explicit, decision-recorded card (fail-closed otherwise).",
 }
 
 

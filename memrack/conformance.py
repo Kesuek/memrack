@@ -39,6 +39,36 @@ def check_backend(obj, *, tmp_home=None) -> dict:
     if not getattr(obj, "limits", None):
         warnings.append("card: limits empty")
 
+    # 2b) mirrored tool names (catalog docks): ONE name claimed twice in a
+    # mirror set aborts conformance (the fail-closed law: no silent
+    # de-duplication, no winner pick). Name read in both schema shapes —
+    # parity with memrack/namechain.extract_tool_name.
+    if callable(getattr(obj, "tool_schemas", None)):
+        try:
+            mirrored = list(obj.tool_schemas() or [])
+        except Exception as exc:
+            _err(errors, "mirror", "tool mirror unreadable: %s: %s"
+                 % (type(exc).__name__, exc))
+            mirrored = None
+        if mirrored is not None:
+            claimed = set()
+            for schema in mirrored:
+                if not isinstance(schema, dict):
+                    continue
+                fn = schema.get("function")
+                sname = fn.get("name") if isinstance(fn, dict) else None
+                if not sname:
+                    sname = schema.get("name")
+                if not sname:
+                    warnings.append("tool schema without a name — skipped (it "
+                                    "mirrors to nothing)")
+                    continue
+                if sname in claimed:
+                    _err(errors, "mirror-collision",
+                         "mirrored tool name %r would register twice (fail-closed "
+                         "collision, never silently deduplicated)" % sname)
+                claimed.add(sname)
+
     # 3) write/idempotence/search smoke (no network, tmp store only)
     if callable(getattr(obj, "write", None)) and callable(getattr(obj, "initialize", None)) \
             and not errors:
