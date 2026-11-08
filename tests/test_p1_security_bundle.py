@@ -494,3 +494,22 @@ def test_status_card_carries_the_turn_gate(tmp_path):
     cards = dict(status["cards"])   # the cards slot is {name: card}
     assert cards["fakedock"].get("forward_turns") is True, cards["fakedock"]
     assert "forward_turns" not in cards["plaindock"], cards["plaindock"]
+
+
+def test_draft_card_states_the_dock_boundary_honestly(tmp_path):
+    """Round-4 receipt: the DRAFT card carries ONE honest boundary line —
+    turn ingestion is opt-in (forward_turns), nothing turn-related is sent
+    to the dock unless gated, and the prefetch rail is named for what it
+    IS (the rack's one fusion fan-out — the card never lies about the
+    delivery)."""
+    fake = FakeProvider("fakesvc")
+    DOCKING.dock("fakesvc", probe=True, loader=_loader_of(fake),
+                 offers=[_offer("fakesvc", str(tmp_path))],
+                 hermes_home=str(tmp_path))
+    card = yaml.safe_load((_dock_dir(tmp_path) / "fakesvc.yaml")
+                          .read_text(encoding="utf-8"))
+    line = str(card.get("dock_boundary") or "")
+    assert "forward_turns" in line and "opt-in" in line, card
+    assert "unless gated" in line, card
+    assert "prefetch" in line, card
+    assert "on_turn" not in card, card   # no invented delivery claim

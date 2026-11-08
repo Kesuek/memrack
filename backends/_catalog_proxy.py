@@ -9,7 +9,8 @@ the host directly — memrack mirrors the ABC and bends four channels:
   ① prefetch(query, session)   the provider text enters memrack's ONE
                                prefetch fusion (the T-031 provider-level
                                fan-out) — never a second, direct host
-                               injection.
+                               injection. AUTOMATIC for rack members
+                               (availability-gated), NOT an opt-in.
   ② system_prompt_block()      concat into memrack's block behind an
                                origin header line ("Concat in memracks
                                Block mit Herkunfts-Headerzeile").
@@ -20,10 +21,14 @@ the host directly — memrack mirrors the ABC and bends four channels:
                                card.
   pass-through for the rest    initialize/shutdown/export (the provider's
                                own store/deps/config stay with the
-                               provider); on_turn -> sync_turn (their
-                               ingestion); on_memory_write forwarded ONLY
-                               when the write semantics are compatible,
-                               otherwise the card says "retrieval only".
+                               provider); on_turn -> sync_turn is NOT an
+                               automatic delivery — turn events reach the
+                               dock ONLY through the card's forward_turns
+                               gate (nothing sent unless gated; the rack's
+                               episodic canon stays untouched);
+                               on_memory_write forwarded ONLY when the
+                               write semantics are compatible, otherwise
+                               the card says "retrieval only".
 
 File-name note (deliberate deviation from the scaffold's rename plan): this
 module KEEPS its leading underscore. discover_backends() loads every

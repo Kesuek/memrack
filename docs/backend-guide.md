@@ -40,7 +40,12 @@ law applies to you too: ONE effective name claimed twice = conformance abort
 (mirror on/off, write-forwards) are CARD data — recorded keys act, absent
 keys fail closed; `best_for`/`limits` stay human-authored (draft
 placeholders), and no probe ever overwrites a reviewed card — `--refresh`
-re-derives from a fresh probe on a provider version change instead.
+re-derives from a fresh probe on a provider version change instead. The
+draft card carries ONE honest boundary line (`dock_boundary`): turn
+ingestion is opt-in (`forward_turns` — nothing sent to the dock unless
+gated), the prefetch rail is the rack's one fusion fan-out (automatic,
+availability-gated — NOT an opt-in), and the tool mirror + system block
+follow the card's recorded decisions.
 
 ### The dock-name law (every name-built path, one validator)
 

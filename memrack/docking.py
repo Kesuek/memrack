@@ -538,6 +538,12 @@ def draft_card(provider_name, probe_report):
     if mirror_tools:
         card["mirror_tools"] = mirror_tools
         card["mirror_decision"] = "mirror"   # the recorded decision (the derivation)
+    # the honest ONE-line dock boundary (what the delivery actually does):
+    # turn ingestion is opt-in (the card's forward_turns gate), prefetch
+    # rides the rack's one fusion fan-out, mirror/block follow the card.
+    card["dock_boundary"] = (
+        "turn ingestion = opt-in (forward_turns, nothing sent unless gated); "
+        "prefetch = fusion fan-out; mirror/block = card decisions")
     # forward_writes stays ABSENT in the draft: undecided = fail-closed
     # retrieval-only; the review records it explicitly when compatible.
     return card
