@@ -14,6 +14,7 @@ import logging
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _LOG = logging.getLogger("memrack.wiki")
@@ -79,9 +80,13 @@ class WikiIndex:
         tokens = [t.lower() for t in _TOKEN.findall(query or "") if len(t) > 1]
         if not tokens:
             return []
-        now = _utcnow_iso()
+        now_iso = _utcnow_iso()
         scored = []
-        for rel, (_mtime, text) in snapshot.items():
+        for rel, (stored_mtime, text) in snapshot.items():
+            try:
+                ts = datetime.fromtimestamp(stored_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            except (TypeError, ValueError, OSError):
+                ts = now_iso
             lines = text.splitlines()
             body = [l.lower() for l in lines]
             title = (lines[0] if lines else "").lower()
@@ -97,7 +102,7 @@ class WikiIndex:
             if score > 0:
                 scored.append({"backend": "wiki", "kind": "page", "rank": 0,
                                "target": "wiki:%s:%s" % (rel, ("L%d" % first_line) if first_line else ""),
-                               "snippet": self._snippet(lines, first_line), "ts": now,
+                               "snippet": self._snippet(lines, first_line), "ts": ts,
                                "score": score})
         scored.sort(key=lambda h: (-h["score"], h["target"]))
         out = []

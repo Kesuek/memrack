@@ -721,14 +721,19 @@ class _MemrackBase:
         pool: dict = {}
         for hits in runs:
             for hit in hits:
-                key = "%s:%s" % (hit.get("backend"), hit.get("target")) or "content:%s" % (hit.get("content") or "")
+                target = hit.get("target")
+                if target is None or str(target).strip() == "":
+                    key = "content:%s" % (hit.get("content") or "")
+                else:
+                    key = "%s:%s" % (hit.get("backend"), target)
                 entry = pool.setdefault(key, {
                     "backend": hit.get("backend"), "kind": hit.get("kind"), "id": hit.get("id"),
-                    "content": hit.get("content"), "target": hit.get("target"),
+                    "content": hit.get("content"), "target": target,
+                    "snippet": hit.get("snippet"),
                     "ts": hit.get("ts"), "hits": hit.get("hits") or 0,
                     "score": 0.0, "found_by": []})
                 entry["score"] += 1.0 / (60.0 + max(1, int(hit.get("rank") or 99)))
-                entry["found_by"].append(hit.get("mode"))
+                entry["found_by"].append(hit.get("mode") or hit.get("kind"))
         merged = list(pool.values())
         merged.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)   # Phase 1: ts DESC
         merged.sort(key=lambda e: (-e["score"], -(e.get("hits") or 0)))    # Phase 2 (stable): score, heat DESC
