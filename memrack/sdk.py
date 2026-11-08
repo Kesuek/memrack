@@ -15,10 +15,13 @@ def fts_match_tokens(query, *, columns=None):
     """Build a safe fts5 MATCH fragment (the base_db lesson, reusable):
     tokens quoted individually (hyphen/colon safe), implicit AND over tokens;
     with `columns`, emits column-qualified OR-combination per column.
-    Advanced passthrough: a query containing ':' rides as-is (deliberate)."""
+    Advanced passthrough ONLY for a real '^word:' prefix that names one of
+    `columns` — stray colons (times 10:30, URLs http://x) are quoted, never
+    ridden raw (T-029 bug 1)."""
     m = (query or "").strip().replace('"', "")
-    if ":" in m:                      # the agent knows what he is doing — passthrough
-        return m
+    pm = re.match(r"(\w+):", m)
+    if pm and columns and pm.group(1) in tuple(columns):
+        return m                      # real column filter — the agent knows what he is doing
     tokens = [t for t in re.split(r"\W+", m) if t]
     if not tokens:
         return ""

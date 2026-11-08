@@ -143,6 +143,7 @@ def _load_manifest(path: Path):
         raise TypeError("manifest %r names backend %r but code says %r"
                         % (path.name, man["name"], backend.name))
     backend.manifest = man  # the card is DATA (the docking law) — attached, verified against code
+    backend.manifest_file = path.name   # the rescan keys on this FILE, never the backend name (T-029 bug 3)
     modes = man.get("search") or ()
     if modes and not callable(getattr(backend, "search", None)):
         raise TypeError("manifest %s claims search=%r but the code ships no search method"
@@ -869,12 +870,23 @@ class _MemrackBase:
 
     def _rescan_dock(self) -> list:
         """Cheap fs-only rescan: manifests on disk that this session's rack has not loaded —
-        they live 'registered (next session)' (bridge-watch spirit, the docking law)."""
+        they live 'registered (next session)' (bridge-watch spirit, the docking law).
+        NOT pending: manifests that FAILED to load (a broken dock is already reported
+        under docking errors — its error entry keys on the manifest `file`, not the
+        backend name, T-029 bug 3) and manifests already loaded even when their file
+        stem differs from the backend's name."""
         dock = docked_dir(self._hermes_home)
         if not (dock and dock.is_dir()):
             return []
-        known = set(self._rack) | {p.get("name") for p in self._parked} | {
-            e.get("name") for e in self._load_errors if e.get("name")}
+        known = set(self._rack) | {p.get("name") for p in self._parked}
+        for b in self._rack.values():
+            mf = getattr(b, "manifest_file", None)
+            if mf:
+                known.add(Path(mf).stem)          # the manifest THIS backend was loaded from
+        for e in self._load_errors:
+            f = e.get("file")
+            if f:
+                known.add(Path(f).stem)           # a failed manifest = honest error, never pending
         pending = []
         for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
             if path.name.startswith("_") or path.name.startswith("disabled-"):

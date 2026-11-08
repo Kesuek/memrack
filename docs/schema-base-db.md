@@ -37,4 +37,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pointers_fts USING fts5(
 ```
 
 Search = FTS5 `MATCH` over the external-content indexes, ranked by
-`rank` (SQLite bm25). `touch(ids)` increments `hits` on returned fact rows.
+`rank` (SQLite bm25). Advanced `col:term` filter syntax is honored only
+when `col` names a real index column; stray colons in plain queries
+(time `10:30`, URLs) are tokenized and quoted, never ridden raw.
+`touch(ids)` increments `hits` on returned fact rows.

@@ -288,14 +288,16 @@ class BaseDbBackend:
                 rows = self._db.execute(sql + order, (self._safe_match(query, cols), k)).fetchall()
             return rows, True
         except sqlite3.OperationalError as exc:
-            # malformed MATCH syntax — fall back to a quoted whole phrase, never crash the search;
-            # a SECOND failure is diagnostic gold — log it, never swallow silently
+            # malformed MATCH syntax — fall back to a quoted whole phrase, never crash
+            # the search. The fallback fragment is built DIRECTLY here: routing it
+            # through _safe_match again would strip its quotes and hand the raw
+            # colon query right back into passthrough (T-029 bug 1 — both tiers
+            # failing on one and the same expression).
             _LOG.warning("memrack base-db fts failed on %r: %s — trying quoted phrase", query, exc)
+            phrase = '"%s"' % query.replace('"', "")
             with self._lock:
                 try:
-                    rows = self._db.execute(
-                        sql + order,
-                        (self._safe_match('"%s"' % query.replace('"', ""), cols), k)).fetchall()
+                    rows = self._db.execute(sql + order, (phrase, k)).fetchall()
                 except sqlite3.OperationalError as exc2:
                     _LOG.error("memrack base-db fts unusable: %s", exc2)
                     return [], False
@@ -303,13 +305,15 @@ class BaseDbBackend:
 
     @staticmethod
     def _safe_match(query, cols):
-        """fts5 MATCH builder: tokens get QUOTED (hyphens are fts5 column syntax —
-        fts5 reads 'Hit-me' as 'no such column: me'). Advanced syntax (col: filters)
-        stays passthrough when the query itself carries a ':'."""
-        m = (query or "").strip()
-        m = m.replace('"', "")
-        if ":" in m:            # advanced passthrough (subject:x) — the agent knows what it is doing
-            return m
+        """fts5 MATCH builder: tokens get QUOTED (hyphens AND colons are fts5 syntax —
+        fts5 reads 'Hit-me' as 'no such column: me', '10:30' as 'no such column: 10').
+        Advanced passthrough ONLY when the query carries a REAL column filter — a
+        '^word:' prefix naming one of `cols`. Plain queries with stray colons
+        (times, URLs) are tokenized and quoted instead of riding raw (T-029 bug 1)."""
+        m = (query or "").strip().replace('"', "")
+        pm = re.match(r"(\w+):", m)
+        if pm and pm.group(1) in tuple(cols):
+            return m            # real column passthrough (subject:x) — the agent knows what it is doing
         tokens = [t for t in re.split(r"\W+", m) if t]
         if not tokens:
             return '"%" '

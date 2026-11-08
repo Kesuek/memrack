@@ -90,9 +90,9 @@ def _run(args) -> int:
                         "facts": [{"id": r[0], "content": r[1], "target": r[2],
                                    "ts": r[3], "hits": r[4]} for r in db.execute(
                                        "SELECT id, content, target, ts, hits FROM facts ORDER BY id")],
-                        "pointers": [{"id": r[0], "subject": r[1], "pointer": r[2], "ts": r[3]}
+                        "pointers": [{"id": r[0], "subject": r[1], "location": r[2], "ts": r[3]}
                                      for r in db.execute(
-                                         "SELECT id, subject, pointer, ts FROM pointers ORDER BY id")]})
+                                         "SELECT id, subject, location, ts FROM pointers ORDER BY id")]})
     finally:
         p.shutdown()
     return 0

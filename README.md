@@ -53,7 +53,8 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       honest degrade (fts-only + gap note) when the env lacks it
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
-      ("registered (next session)" in `memrack_status`)
+      ("registered (next session)" in `memrack_status`; broken manifests
+      surface as docking errors instead — never as a next-session promise)
 - [x] backend SDK: `memrack.sdk.MemrackBackend` base (fts5/lock/degrade lessons
       pre-built, OPTIONAL — duck-typing remains the law), `memrack.conformance`
       (`check_backend`/`assert_conformance` + standalone runner), `backends/_template.py`
