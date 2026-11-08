@@ -230,3 +230,10 @@ blank-line joins, and a single result keeps the exact pre-fanout form.
 ## License
 
 MIT
+
+## Ships with a dev skill
+
+`skills/memory-provider-dev/SKILL.md` — building, auditing and docking memory
+providers: the ABC conformance check, the three config surfaces, the fail-closed
+docking contract, mirrored-tool naming, and the fixes for the pitfalls this
+plugin's growth uncovered. See `docs/backend-guide.md` for the reference flows.
