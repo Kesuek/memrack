@@ -326,19 +326,39 @@ class _MemrackBase:
     def save_config(self, values, hermes_home=None):
         """Setup-consumer contract — the wizard hands values back; write the
         SAME block _profile_config reads (``plugins.memrack`` in config.yaml,
-        wiki-memory convention). Failure = warning, never a setup crash."""
+        wiki-memory convention). MERGE per key, not replace: keys the wizard
+        did not send (search_top_k, embedding_model, ...) survive a partial
+        write; sent keys override. The host config.yaml is written ATOMICALLY
+        (tmp file in the same directory, 0600, then os.replace) — never a
+        non-atomic direct rewrite of the live Hermes config; a crashed write
+        leaves the previous config intact. Failure = warning, never a setup
+        crash."""
         config_path = _hermes_home(hermes_home) / "config.yaml"
         try:
             import yaml
-            existing = {}
+            existing: dict = {}
             if config_path.exists():
                 existing = yaml.safe_load(
                     config_path.read_text(encoding="utf-8-sig")) or {}
-            existing.setdefault("plugins", {})
-            existing["plugins"][PLUGIN_NAME] = dict(values or {})
-            config_path.write_text(
+            if not isinstance(existing, dict):
+                existing = {}          # non-dict root → start clean, never crash
+            plugins = existing.get("plugins")
+            if not isinstance(plugins, dict):
+                plugins = {}           # `plugins: null`/scalar → fresh mapping
+                existing["plugins"] = plugins
+            prior = plugins.get(PLUGIN_NAME)
+            if not isinstance(prior, dict):
+                prior = {}
+            plugins[PLUGIN_NAME] = {**prior, **dict(values or {})}
+            tmp = config_path.parent / (config_path.name + ".tmp")
+            tmp.write_text(
                 yaml.dump(existing, default_flow_style=False, allow_unicode=True),
                 encoding="utf-8")
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, config_path)
 
             # Mirror: keep the desktop-panel source in sync (merge, 0600) —
             # otherwise the UI shows defaults instead of the state after a wizard setup.

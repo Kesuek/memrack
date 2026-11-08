@@ -24,6 +24,17 @@ _HERMES_TREE = pathlib.Path.home() / ".hermes" / "hermes-agent"
 if str(_HERMES_TREE) not in sys.path:
     sys.path.insert(0, str(_HERMES_TREE))
 
+# config_schema.py imports the runtime surface `plugins.memory.config_schema`
+# (→ hermes_cli.config → hermes_yaml): without the Hermes tree those imports
+# are unsatisfiable and the declared-schema tests cannot run. Skip at module
+# top on fresh checkouts instead of failing — the bridge/wizard tests elsewhere
+# (test_setup.py) carry no Hermes dependency and stay runnable everywhere.
+pytest.importorskip(
+    "plugins.memory.config_schema",
+    reason="declared-surface tests need the Hermes runtime "
+           "(plugins.memory.config_schema); fresh checkouts without the "
+           "Hermes tree skip instead of failing")
+
 
 def _load_declared():
     spec2 = importlib.util.spec_from_file_location(

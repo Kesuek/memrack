@@ -97,15 +97,66 @@ def test_save_config_writes_plugins_memrack_block(tmp_path):
     assert data["memory"]["provider"] == "wiki-memory"   # activation remains
 
 
-def test_save_config_replaces_block_keeps_rest(tmp_path):
+def test_save_config_merges_block_keeps_rest(tmp_path):
+    """A wizard write MERGES the block: the sent key wins, prior keys survive.
+    A replace would strand the desktop-only keys (search_top_k, ...) on every
+    setup run."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text("plugins:\n  memrack:\n    old_key: 1\n    enabled_backends: base-db\n",
                    encoding="utf-8")
     prov = mr._MemrackBase()
     prov.save_config({"enabled_backends": "base-db,state-episodic"}, str(tmp_path))
     block = _read_yaml(cfg)["plugins"]["memrack"]
-    assert block == {"enabled_backends": "base-db,state-episodic"}   # block replaced, not appended
-    assert "old_key" not in block
+    assert block == {"old_key": 1,   # prior block keys survive
+                     "enabled_backends": "base-db,state-episodic"}
+
+
+def test_save_config_partial_wizard_write_keeps_search_top_k(tmp_path, monkeypatch):
+    """A partial wizard send ({backend} only) must NOT drop a previously stored
+    search_top_k — block merge, not replace. Uses the DEFAULT home resolution
+    (monkeypatched HERMES_HOME) to exercise the exact path the wizard takes,
+    and asserts the desktop mirror converges the same way."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    prov = mr._MemrackBase()
+    prov.save_config({"enabled_backends": "base-db", "search_top_k": 16})
+    prov.save_config({"backend": "base-db"})            # partial write: no top-k
+    block = _read_yaml(tmp_path / "config.yaml")["plugins"]["memrack"]
+    assert block["search_top_k"] == 16                  # survived the merge
+    assert block["backend"] == "base-db"
+    flat = json.loads(
+        (tmp_path / "memrack" / "config.json").read_text(encoding="utf-8"))
+    assert flat["search_top_k"] == 16                   # mirror merge agrees
+    assert flat["backend"] == "base-db"
+
+
+def test_save_config_host_yaml_atomic(tmp_path, monkeypatch):
+    """The HOST config.yaml (the live Hermes config, not a plugin-owned file)
+    is written atomically: tmp file in the same directory, then os.replace —
+    never a direct write_text; no tmp is left behind and the rest of the
+    config survives untouched."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("memory:\n  provider: wiki-memory\n", encoding="utf-8")
+    import os
+    calls = []
+    real_replace = os.replace
+
+    def _spy(src, dst):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _spy)
+    prov = mr._MemrackBase()
+    prov.save_config({"enabled_backends": "base-db"}, str(tmp_path))
+    dst_names = sorted(pathlib.Path(d).name for _, d in calls)
+    assert dst_names == ["config.json", "config.yaml"]   # both stores replaced
+    for src, dst in calls:
+        assert pathlib.Path(src).parent == pathlib.Path(dst).parent  # same dir
+        assert pathlib.Path(src).name.endswith(".tmp")
+    assert [p.name for p in tmp_path.iterdir()
+            if p.name.endswith(".tmp")] == []            # no leftover tmp
+    data = _read_yaml(cfg)
+    assert data["memory"]["provider"] == "wiki-memory"   # host config intact
+    assert data["plugins"]["memrack"] == {"enabled_backends": "base-db"}
 
 
 def test_save_config_unwritable_home_no_crash(tmp_path, caplog):
