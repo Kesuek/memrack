@@ -1045,6 +1045,170 @@ def _profile_retention(hermes_home=None):
     return _retention_days(value)
 
 
+# ── the switch-consistency law: the grace's store half ──────────────────────
+
+TOGGLE_SUFFIX = "_in_rack"
+"""The membership-toggle key family — the ONLY membership keys in the
+stores (the gear pane's law): the `enabled_backends` string is internal
+store repr the initialize fold maintains, and this law never writes it."""
+
+
+def _truthy_value(value):
+    """Read-side truth for stored toggles — the provider core's `_truthy`
+    mirror (native bools and wizard strings mean the same). ``None`` (the
+    key absent everywhere) survives as None: the caller must tell 'off'
+    from 'never decided' apart."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("true", "yes", "on", "1")
+
+
+def store_switch_state(name, *, hermes_home=None):
+    """The `<name>_in_rack` read over the dual store, with the provider
+    core's `_profile_config` precedence (the yaml `plugins.<plugin>` block
+    first, the flat json's keys WIN — the freshest user intent). Returns
+    the truth-normalized state; ``None`` when NEITHER store carries the key
+    (never a guessed default)."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    key = "{}{}".format(name, TOGGLE_SUFFIX)
+    home = _home_root(hermes_home)
+    value = None
+    try:
+        import yaml as _yaml
+        raw = _yaml.safe_load((home / "config.yaml").read_text(
+            encoding="utf-8-sig")) or {}
+        if isinstance(raw, dict):
+            plugins = raw.get("plugins")
+            if isinstance(plugins, dict) and isinstance(plugins.get(_SELF), dict):
+                value = plugins[_SELF].get(key)
+    except Exception:
+        pass
+    try:
+        import json as _json
+        flat = home / _SELF / "config.json"
+        if flat.is_file():
+            data = _json.loads(flat.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict) and key in data:
+                value = data.get(key)
+    except Exception:
+        pass
+    return _truthy_value(value)
+
+
+def _write_yaml_block_key(home, key, value):
+    """One key into `plugins.<plugin>` in config.yaml — the provider core's
+    save write discipline mirrored (merge per key, atomic tmp sibling in the
+    same directory, os.replace, file 0600). Fail-closed: an unreadable or
+    non-mapping root is NEVER rewritten (that would clobber the host config)
+    — {'file', 'changed'} on success, {'file', 'error'} on refusal."""
+    import yaml as _yaml
+    path = home / "config.yaml"
+    root = {}
+    if path.exists():
+        root = _yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(root, dict):
+            return {"file": str(path), "error":
+                    "config.yaml carries no mapping — the yaml store is left "
+                    "untouched (never clobbers the host config)"}
+    plugins = root.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+        root["plugins"] = plugins
+    block = plugins.get(_SELF)
+    if not isinstance(block, dict):
+        block = {}
+        plugins[_SELF] = block
+    if _truthy_value(block.get(key)) == value:
+        return {"file": str(path), "changed": False}
+    block[key] = value
+    tmp = path.parent / (path.name + ".tmp")
+    tmp.write_text(_yaml.dump(root, default_flow_style=False,
+                              allow_unicode=True), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return {"file": str(path), "changed": True}
+
+
+def _write_flat_json_key(home, key, value):
+    """One key into the flat json store `<home>/<plugin>/config.json` — the
+    save write's flat-mirror half (merge per key, atomic tmp sibling,
+    os.replace, 0600). The desktop's writer owns the file: a non-mapping
+    body is left untouched fail-closed. {'file', 'changed'} / {'file', 'error'}."""
+    import json as _json
+    path = home / _SELF / "config.json"
+    current = {}
+    if path.is_file():
+        current = _json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(current, dict):
+            return {"file": str(path), "error":
+                    "the flat json store carries no mapping — left untouched "
+                    "(the desktop's writer owns this file)"}
+    if _truthy_value(current.get(key)) == value:
+        return {"file": str(path), "changed": False}
+    current[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(_json.dumps(current, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return {"file": str(path), "changed": True}
+
+
+def store_switch(name, member, *, hermes_home=None):
+    """Write `<name>_in_rack = member` into BOTH config stores — the grace
+    law's store half (switch mirrors reality: the store must stop claiming
+    a member the rack no longer hosts).
+
+    The write discipline is the provider core's `save_config` mirrored,
+    because this machine stays spec-load independent of the core module
+    (the same isolation `_profile_retention` documents with its dual-store
+    READ): MERGE one key into `plugins.<plugin>` in config.yaml and into the
+    flat json (merge per key, atomic tmp in the same directory, os.replace,
+    file 0600) — never a wholesale rewrite, every other key of every other
+    plugin survives. Fail-closed per store: a store that does not parse is
+    left untouched and reported (never a "repair" — the host config is never
+    clobbered). Churn-free: a store already at the target value is not
+    rewritten. Returns the honest per-store receipt {name, member, yaml,
+    json}; a failed store carries {"error": ...} — the caller surfaces it,
+    nothing here raises."""
+    name = str(name or "").strip()
+    if not name:
+        return {"error": "the store switch write needs the backend name"}
+    key = "{}{}".format(name, TOGGLE_SUFFIX)
+    home = _home_root(hermes_home)
+    out = {"name": name, "member": bool(member)}
+    try:
+        out["yaml"] = _write_yaml_block_key(home, key, bool(member))
+    except Exception as exc:
+        out["yaml"] = {"error": "yaml store write failed: %s: %s"
+                                % (type(exc).__name__, exc)}
+    try:
+        out["json"] = _write_flat_json_key(home, key, bool(member))
+    except Exception as exc:
+        out["json"] = {"error": "flat json store write failed: %s: %s"
+                                % (type(exc).__name__, exc)}
+    errors = [store["error"] for store in (out["yaml"], out["json"])
+              if isinstance(store, dict) and store.get("error")]
+    if errors:
+        out["error"] = "; ".join(errors)
+    return out
+
+
 def retention_cleanup(hermes_home=None, *, retention_days=None):
     """The retention group: every card carrying `uninstalled_at` older than
     the retention leaves WITH a per-file backup under
@@ -1178,19 +1342,21 @@ def _single_grace(provider_name, *, loader=None, hub=None, hermes_home=None):
         if probe["installed"] is False:
             parked_target = dock / ("disabled-%s" % active.name)
             os.replace(active, parked_target)   # the presence park convention
+            switched = store_switch(name, False, hermes_home=hermes_home)
             stamped = card.get(FLAG_UNINSTALLED)
             if not stamped:
                 written = flag_card(parked_target, note=note)
                 if "error" in written:
                     return {"provider": name, "status": "park-error",
-                            "error": written["error"]}
+                            "error": written["error"], "switch": switched}
                 stamped = written["uninstalled_at"]
             return {"provider": name, "status": "uninstalled-parked",
                     "card": parked_target.name,
                     "uninstalled_at": stamped,
                     "note": note,
                     "reason": probe["reason"],
-                    "retention_days": retention}
+                    "retention_days": retention,
+                    "switch": switched}
         if probe["installed"] is None:
             return None
         if card.get(FLAG_UNINSTALLED):
@@ -1217,12 +1383,20 @@ def _single_grace(provider_name, *, loader=None, hub=None, hermes_home=None):
         age = _age_days(card[FLAG_UNINSTALLED])
         days_left = None if age is None or retention == _NEVER else max(
             0, int(retention - (age or 0)))
-        return {"provider": name, "status": "still-uninstalled",
-                "card": parked.name,
-                "uninstalled_at": card[FLAG_UNINSTALLED],
-                "days_left": days_left,
-                "retention_days": retention,
-                "note": note}
+        receipt = {"provider": name, "status": "still-uninstalled",
+                   "card": parked.name,
+                   "uninstalled_at": card[FLAG_UNINSTALLED],
+                   "days_left": days_left,
+                   "retention_days": retention,
+                   "note": note}
+        # switch consistency on the parked stand: a store switch that still
+        # claims truthy against a parked card is a lie — reconcile it off
+        # (no card file is touched, no write when the key already sits off)
+        if store_switch_state(name, hermes_home=hermes_home):
+            receipt["switch"] = store_switch(name, False,
+                                             hermes_home=hermes_home)
+            receipt["switch_reconciled"] = True
+        return receipt
     target = dock / (parked.name[len("disabled-"):]
                      if parked.name.startswith("disabled-")
                      else parked.name)
@@ -1231,7 +1405,22 @@ def _single_grace(provider_name, *, loader=None, hub=None, hermes_home=None):
     if "error" in cleared:
         return {"provider": name, "status": "restored-flag-error",
                 "card": target.name, "error": cleared["error"]}
-    return {"provider": name, "status": "restored-from-uninstall",
-            "card": target.name,
-            "note": "provider installed again — card restored without a "
-                    "re-probe (the card's recorded decisions stay)"}
+    receipt = {"provider": name, "status": "restored-from-uninstall",
+               "card": target.name,
+               "note": "provider installed again — card restored without a "
+                       "re-probe (the card's recorded decisions stay)"}
+    # the switch mirrors the user, not the restore: ON keeps the plain
+    # presence restore; OFF (or never written) STAYS out — the store records
+    # it and the receipt names the deliberate re-enable
+    if store_switch_state(name, hermes_home=hermes_home):
+        receipt["switch"] = {"name": name, "member": True,
+                             "note": "the user's switch sits ON — the plain "
+                                     "presence restore (unchanged law)"}
+    else:
+        receipt["switch"] = store_switch(name, False,
+                                         hermes_home=hermes_home)
+        if not receipt["switch"].get("error") and \
+                store_switch_state(name, hermes_home=hermes_home) is not True:
+            receipt["note"] += ("; the membership switch stayed OFF — "
+                                "flip the switch to reactivate")
+    return receipt

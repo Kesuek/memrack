@@ -672,13 +672,15 @@ class _MemrackBase:
             grace = self._uninstalled_report
             if isinstance(grace, dict):
                 if grace.get("parked") or grace.get("removed") \
-                        or grace.get("restored"):
+                        or grace.get("restored") or grace.get("switch_off"):
                     _LOG.info(
                         "memrack uninstall grace: parked=%s restored=%s "
-                        "removed=%s",
+                        "removed=%s switch_off=%s",
                         [p.get("provider") for p in grace.get("parked", [])],
                         [p.get("provider") for p in grace.get("restored", [])],
-                        [p.get("provider") for p in grace.get("removed", [])])
+                        [p.get("provider") for p in grace.get("removed", [])],
+                        [p.get("provider") for p in
+                         grace.get("switch_off", [])])
                 if grace.get("error"):
                     _LOG.warning("memrack uninstall grace failed: %s",
                                  grace["error"])
@@ -1537,8 +1539,16 @@ class _MemrackBase:
             except Exception:
                 pass    # the status never crashes over the surface (it degrades)
             report = getattr(self, "_uninstalled_report", None)
-            if isinstance(report, dict) and report.get("removed"):
-                out["retention_cleanups"] = list(report["removed"])
+            if isinstance(report, dict):
+                if report.get("removed"):
+                    out["retention_cleanups"] = list(report["removed"])
+                # the restore receipts (with the reactivate hint) and the
+                # switch-consistency receipts (every store switch this
+                # initialize flipped off) surface here too — honest, additive
+                if report.get("restored"):
+                    out["restored_docks"] = list(report["restored"])
+                if report.get("switch_off"):
+                    out["switch_consistency"] = list(report["switch_off"])
         return out
 
 
@@ -1551,7 +1561,9 @@ _TOOL_DESCRIPTIONS = {
                      "knowledge belongs in wiki pages (file tools), not here.",
     "memrack_status": "Rack inventory: backends with card (best_for/limits/modes), heat counters, "
                       "gaps (engines that degraded), parked/uninstalled-docked cards (with the "
-                      "retention countdown), retention removal receipts and docking errors.",
+                      "retention countdown), retention removal receipts and docking errors; "
+                      "restored-dock receipts carry the flip-the-switch-to-reactivate hint and "
+                      "switch_consistency names every store switch the grace law flipped off.",
     "memrack_import": "Import the builtin memory's legacy entries (MEMORY.md/USER.md, §-delimited) "
                       "as fact rows — idempotent via hash-dedupe. Migration job, once per profile.",
     "memrack_dock": "The catalog-provider docking machine: list installed, inactive catalog memory "

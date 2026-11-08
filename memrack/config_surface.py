@@ -415,7 +415,7 @@ def uninstall_grace_hook(config, hermes_home=None, docking=None, hub=None,
     machine = docking if docking is not None else _docking()
     retention = machine._retention_days((config or {}).get("dock_retention_days"))
     report = {"retention_days": retention, "parked": [], "restored": [],
-              "removed": [], "kept": []}
+              "removed": [], "kept": [], "switch_off": []}
     try:
         dock_dir = _docked_dir(hermes_home)
         if not dock_dir.is_dir():
@@ -471,7 +471,18 @@ def uninstall_grace_hook(config, hermes_home=None, docking=None, hub=None,
                     entry["uninstalled_at"] = written["uninstalled_at"]
             else:
                 entry["uninstalled_at"] = card[machine.FLAG_UNINSTALLED]
+            # switch consistency's write half: the membership switches go OFF
+            # with the park — the store must stop claiming a member the rack
+            # no longer hosts (the toggle keys are the only membership keys)
+            entry["switch"] = machine.store_switch(name, False,
+                                                   hermes_home=hermes_home)
+            if entry["switch"].get("error"):
+                entry["switch_error"] = entry["switch"]["error"]
             report["parked"].append(entry)
+            report["switch_off"].append({"provider": name,
+                                         "card": parked_name,
+                                         "trigger": "grace-park",
+                                         "stores": entry["switch"]})
         # pass 2 — re-installed flagged PARKED cards restore (no re-probe)
         for path in sorted(list(dock_dir.glob("disabled-*.yaml"))
                            + list(dock_dir.glob("disabled-*.yml"))):
@@ -492,6 +503,21 @@ def uninstall_grace_hook(config, hermes_home=None, docking=None, hub=None,
             loader = loader_of(name) if callable(loader_of) else None
             probe = machine.uninstall_probe(name, loader=loader, hub=hub)
             if probe["installed"] is not True:
+                # switch consistency's reconcile half: a parked card whose
+                # store switch still sits truthy lies about the rack — the
+                # stale on-key gets reconciled off (no card file touched,
+                # no write when the key already sits off)
+                if machine.store_switch_state(name,
+                                              hermes_home=hermes_home):
+                    wrote = machine.store_switch(name, False,
+                                                 hermes_home=hermes_home)
+                    report["switch_off"].append({
+                        "provider": name, "card": path.name,
+                        "trigger": "parked-switch-truthy",
+                        "reason": "the parked card's store switch sat "
+                                  "truthy — reconciled off (the switch "
+                                  "mirrors reality)",
+                        "stores": wrote})
                 continue   # still gone / unknown — the retention clock runs
             out = set_docked_membership(name, True, hermes_home=hermes_home)
             restored_name = out.get("card")
@@ -506,6 +532,25 @@ def uninstall_grace_hook(config, hermes_home=None, docking=None, hub=None,
                              "decisions stay)"}
             if "error" in cleared:
                 entry["error"] = cleared["error"]
+            # switch consistency's restore half: the switch mirrors the user,
+            # never the restore — ON keeps the plain presence restore (the
+            # established law); OFF (or never written) STAYS out: the store
+            # records the off and the note names the deliberate re-enable
+            if machine.store_switch_state(name, hermes_home=hermes_home):
+                entry["switch"] = {"name": name, "member": True,
+                                   "note": "the user's switch sits ON — the "
+                                           "plain presence restore "
+                                           "(unchanged law)"}
+            else:
+                entry["switch"] = machine.store_switch(name, False,
+                                                       hermes_home=hermes_home)
+                if entry["switch"].get("error"):
+                    entry["switch_error"] = entry["switch"]["error"]
+                elif machine.store_switch_state(name,
+                                                hermes_home=hermes_home) \
+                        is not True:
+                    entry["note"] += ("; the membership switch stayed OFF — "
+                                      "flip the switch to reactivate")
             report["restored"].append(entry)
         # pass 3 — the retention group (clock-based, honest removals)
         report["removed"] = machine.retention_cleanup(

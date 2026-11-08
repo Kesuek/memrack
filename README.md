@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (239 tests green)
+## Status — v0.7.0 (249 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -91,7 +91,14 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       `memrack_status` — never a silent absence, never dock-error spam);
       `dock_retention_days` (default 14, 0 = immediate, -1 = never) decides
       when park turns into removal with a per-file backup, and a re-install
-      before the retention restores the card untouched (no re-probe)
+      before the retention restores the card untouched (no re-probe) — and
+      the rack keeps the store SWITCHES honest: a parked card's
+      `<name>_in_rack` keys flip OFF in both config stores (merge per key,
+      atomic 0600 — the gear pane shows no switch "on" for a provider the
+      rack no longer hosts), a re-installed card restores with its switch
+      still OFF plus a "flip the switch to reactivate" note (the user
+      re-enables deliberately), and a parked card whose store switch still
+      claims on is reconciled off
 - [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
 - [x] config-surface for the docks (T-036): one `<name>_in_rack` membership

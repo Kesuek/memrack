@@ -67,6 +67,27 @@ parked WITHOUT the flag (the membership toggle's explicit decision) is
 never touched by the grace. Hand-written bridge manifests (name/module
 only, no machine dock evidence) live outside this law entirely.
 
+**The switch-consistency half.** The `<name>_in_rack` toggles are the
+config surfaces' ONLY membership keys, so the law never leaves one lying
+against the rack: when a card parks, `memrack` flips the key to `false`
+in BOTH stores (`plugins.memrack` in `config.yaml` and the flat json
+`<hermes_home>/memrack/config.json` — merge per key, atomic tmp sibling,
+0600, the host config never clobbered: a store that does not parse is
+skipped with an error, never "repaired"; a store already at the target is
+not rewritten). A re-install before the retention restores the card as
+recorded, but the switch STAYS OFF — the store keeps `false` and the
+restore receipt carries "the membership switch stayed OFF — flip the
+switch to reactivate" (only when the switch reads off after the write; a
+switch the user deliberately left ON keeps the plain presence restore).
+Until the user flips the switch, the initialize fold keeps the restored
+card parked. A parked card whose store switch still claims on (pre-law
+stands) is reconciled off at the next initialize or `dock --refresh`, the
+card file itself untouched. The `enabled_backends` string is never
+written by this law (internal store repr, maintained by the fold); hermes-
+less (no provider hub) the whole law stays inert, store writes included.
+`memrack_status` serves the receipts: `restored_docks` (with the hint)
+and `switch_consistency` (every store switch the law flipped).
+
 ### The gear pane (declared surface) and its staleness
 
 The desktop gear pane (Plugins → memrack) renders the membership family
@@ -160,6 +181,10 @@ that actually derives modes replaces them).
   LLM-routing process was removed from this project as broken.
 - **The card never lies** — a claimed `search` mode without the method, or an
   env-lost mode silently promised, is a registry/degrade error, never a silent empty.
+- **The store switch mirrors reality** — the membership toggles are the config
+  stores' only membership keys: the grace law flips them off when it parks a
+  card and keeps them off when it restores one; a store that claims a member
+  the rack no longer hosts is reconciled, never trusted.
 - **All storage under `<hermes_home>/plugin-data/memrack/`** (profile-scoped, 0600-ish
   private dirs) — never `$HERMES_HOME/cache/` (scratch prunes!), never hardcoded homes.
 - **EPISODIC turns are NOT copied** — Hermes state.db is canonical; only facts/pointers
