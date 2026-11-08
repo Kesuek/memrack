@@ -6,7 +6,7 @@ Loaded BY PATH (never imported as a package) and may import only
 plugin's OWN config-surface seams (``memrack/config_surface.py``, the T-036
 helpers) by path with the provider core's ONE-COPY convention, so the
 declared payload carries the dynamic ``<name>_in_rack`` toggle family and
-the ``dock_want`` select beside the static six. Storage = ``flat_json`` —
+the ``dock_want`` select beside the static five. Storage = ``flat_json`` —
 the desktop PUT writes ``<hermes_home>/memrack/config.json`` (atomic 0600,
 partial saves touch only submitted keys). The provider reads BOTH stores:
 ``config.yaml`` ``plugins.memrack`` first, flat_json keys win (the newest
@@ -163,8 +163,10 @@ def _docking_module():
     return mod
 
 
-# ── the static six (byte-identical to the pre-T-037 module: same order,
-#    same values, same kinds/labels/options) ─────────────────────────────────
+# ── the static five (the pane base fields, byte-identical values: the
+#    former membership select LEFT the pane — the toggle family below is
+#    the pane's ONE membership UI; the ``enabled_backends`` string stays
+#    internal store repr that the initialize fold maintains) ────────────────
 
 _STATIC_FIELDS = (
     ProviderField(
@@ -174,22 +176,6 @@ _STATIC_FIELDS = (
             ProviderFieldOption(value="", label="no force (route by kind)"),
             ProviderFieldOption(value="base-db", label="base-db"),
             ProviderFieldOption(value="wiki", label="wiki"),
-        ),
-        inline=True,
-    ),
-    ProviderField(
-        key="enabled_backends", label="Rack membership", kind=KIND_SELECT,
-        default="base-db,state-episodic",
-        description="Which built-ins are in the rack (on/off per backend)",
-        options=(
-            ProviderFieldOption(value="base-db",
-                                label="base-db only (stdlib floor)"),
-            ProviderFieldOption(value="base-db,state-episodic",
-                                label="base-db + state-episodic (session history)"),
-            ProviderFieldOption(value="base-db,wiki",
-                                label="base-db + wiki (markdown bridge)"),
-            ProviderFieldOption(value="base-db,state-episodic,wiki",
-                                label="full rack (all three)"),
         ),
         inline=True,
     ),

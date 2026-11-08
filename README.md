@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (223 tests green)
+## Status — v0.7.0 (224 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -101,10 +101,13 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       one chat-confirm revision, drift-recheck-immun afterwards)
 - [x] the declared gear pane carries the family too (T-037,
       import-derived `config_schema.py`): the same `<name>_in_rack`
-      toggles + the `dock_want` select render beside the unchanged static
-      six; a pane toggle acts per `/new` through the initialize fold, and
-      the pane's schema view is frozen per backend process (the staleness
-      note below)
+      toggles + the `dock_want` select render beside the five remaining
+      static fields — the toggle switches are the pane's ONLY membership
+      UI (the `enabled_backends` dropdown left the pane: a combined-stand
+      string could contradict the toggles' individual state; the string
+      stays internal store repr the fold maintains); a pane toggle acts
+      per `/new` through the initialize fold, and the pane's schema view
+      is frozen per backend process (the staleness note below)
 
 ## Config surface — membership toggles + dock_want (T-036/T-037)
 
@@ -132,12 +135,16 @@ binding shim) at the NEXT `initialize()` — an explicit user decision, no
 auto-dock.
 
 The DECLARED desktop panel (gear → Plugins → memrack) carries the SAME
-family ADDITIVELY (T-037): `config_schema.py` builds `CONFIG_SCHEMA` at
-import time from the SAME config-surface seams — the six static fields
-stay first and byte-identical, then one `<name>_in_rack` toggle per known
+family (import-derived `config_schema.py`): the five remaining static
+fields — force-backend override, auto-enable toggle, top_k, the vec
+group — stay first, then one `<name>_in_rack` toggle per known
 backend (the shipped built-ins plus the ACTIVE dock cards in
 `backends.d/`; the default follows the current membership stand) and the
-`dock_want` select. Both panes write the same dual-store block, so the
+`dock_want` select. The pane renders NO `enabled_backends` dropdown:
+the toggles are its only membership UI, while the comma string remains
+the internal store representation the initialize fold keeps consistent
+(dedupe, the `base-db` floor). The setup wizard keeps the select for the
+first-setup flow. Both panes write the same dual-store block, so the
 stores stay the single source of truth.
 
 **Staleness (Achtung)**: the web server caches the schema per file path,

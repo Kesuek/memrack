@@ -52,7 +52,7 @@ pytest.importorskip(
            "Hermes tree skip instead of failing")
 
 _SCHEMA_PATH = _ROOT / "config_schema.py"
-_STATIC_KEYS = ("backend", "enabled_backends", "auto_enable", "search_top_k",
+_STATIC_KEYS = ("backend", "auto_enable", "search_top_k",
                 "embedding_model", "ollama_host")
 
 
@@ -103,10 +103,11 @@ def _toggle_keys(schema):
 # ── (a) CONFIG_SCHEMA at import carries the live toggle family ──────────────
 
 def test_declared_schema_carries_live_membership_toggles(tmp_path, monkeypatch):
-    """Plan T-037 (1): CONFIG_SCHEMA is built at import — a tmp home with a
-    dock card sim + a live flat config renders ONE bool toggle per backend
+    """The declared pane: CONFIG_SCHEMA is built at import — a tmp home with
+    a dock card sim + a live flat config renders ONE bool toggle per backend
     (built-ins sized to the current stand, docked presence wins) appended
-    AFTER the unchanged static six."""
+    AFTER the unchanged static five (the pane's ``enabled_backends`` select
+    already left: the toggles are its only membership UI)."""
     mod = _load_schema(
         tmp_path, monkeypatch, module_name="_t037_live_family",
         config_json={"enabled_backends": "base-db,state-episodic"},
@@ -115,8 +116,7 @@ def test_declared_schema_carries_live_membership_toggles(tmp_path, monkeypatch):
     import dataclasses
 
     # the family appended additively: toggles + dock_want, static order kept
-    assert list(mod.CONFIG_SCHEMA.fields[:6]) == list(mod.CONFIG_SCHEMA.fields[:6])
-    assert _STATIC_KEYS == tuple(f.key for f in mod.CONFIG_SCHEMA.fields[:6])
+    assert _STATIC_KEYS == tuple(f.key for f in mod.CONFIG_SCHEMA.fields[:5])
     for name, expect in (("base-db", "true"), ("limbic", "true"),
                          ("state-episodic", "true"), ("wiki", "false")):
         field = by["%s_in_rack" % name]
@@ -157,7 +157,7 @@ def test_declared_schema_without_docks_is_builtins_only(tmp_path, monkeypatch):
         str(cs._docked_dir(str(tmp_path / "hermes-home")))
 
 
-# ── (b) the static six stay byte-identical at the top ────────────────────────
+# ── (b) the static five stay byte-identical at the top ───────────────────────
 
 _BASE_STATIC = [
     {
@@ -171,25 +171,6 @@ _BASE_STATIC = [
              "description": ""},
             {"value": "base-db", "label": "base-db", "description": ""},
             {"value": "wiki", "label": "wiki", "description": ""}),
-        "env_key": None, "aliases": (), "env_fallbacks": (),
-        "inline": True, "group": "", "info": "", "scope": "host",
-    },
-    {
-        "key": "enabled_backends", "label": "Rack membership",
-        "kind": "select", "default": "base-db,state-episodic",
-        "description":
-            "Which built-ins are in the rack (on/off per backend)",
-        "placeholder": "",
-        "options": (
-            {"value": "base-db", "label": "base-db only (stdlib floor)",
-             "description": ""},
-            {"value": "base-db,state-episodic",
-             "label": "base-db + state-episodic (session history)",
-             "description": ""},
-            {"value": "base-db,wiki",
-             "label": "base-db + wiki (markdown bridge)", "description": ""},
-            {"value": "base-db,state-episodic,wiki",
-             "label": "full rack (all three)", "description": ""}),
         "env_key": None, "aliases": (), "env_fallbacks": (),
         "inline": True, "group": "", "info": "", "scope": "host",
     },
@@ -229,17 +210,19 @@ _BASE_STATIC = [
 ]
 
 
-def test_declared_static_six_fields_are_byte_identical(tmp_path, monkeypatch):
-    """Plan T-037 (1): the base fields (backend, enabled_backends,
-    auto_enable, search_top_k, embedding/ollama group, auto_enable) stay
-    UNCHANGED at the top — only the family is appended ADDITIVELY; every
-    dataclass value of the first six fields matches the pre-T-037 schema."""
+def test_declared_static_five_fields_are_byte_identical(tmp_path, monkeypatch):
+    """The five surviving base fields (backend, auto_enable, search_top_k,
+    embedding/ollama group) stay UNCHANGED at the top of the pane — the
+    family is appended ADDITIVELY and the ``enabled_backends`` select LEFT
+    the pane (the toggle family is its only membership UI; the string
+    stays internal store repr). Every dataclass value of the first five
+    fields matches the pre-drop schema byte for byte."""
     mod = _load_schema(tmp_path, monkeypatch, module_name="_t037_static",
                        config_json={})
     import dataclasses
-    first_six = [dataclasses.asdict(f) for f in mod.CONFIG_SCHEMA.fields[:6]]
-    assert first_six == _BASE_STATIC, first_six
-    assert _STATIC_KEYS == tuple(f.key for f in mod.CONFIG_SCHEMA.fields[:6])
+    first_five = [dataclasses.asdict(f) for f in mod.CONFIG_SCHEMA.fields[:5]]
+    assert first_five == _BASE_STATIC, first_five
+    assert _STATIC_KEYS == tuple(f.key for f in mod.CONFIG_SCHEMA.fields[:5])
 
 
 # ── (c) the key law: no special characters, bool kind ───────────────────────
@@ -421,3 +404,34 @@ def test_gear_toggle_action_is_churn_free_across_inits(tmp_path):
     plain.initialize(session_id="T037B", hermes_home=str(plain_home))
     assert "enabled_backends" not in plain._config, plain._config
     assert not [k for k in plain._config if k.endswith("_in_rack")], plain._config
+
+
+def test_gear_string_repr_folds_on_without_pane_field(tmp_path, monkeypatch):
+    """The pane's membership select is gone from the DECLARED schema (the
+    toggle family is its only membership UI) while the store repr keeps
+    its shape: the toggle defaults still seed FROM the ``enabled_backends``
+    string, and acting a pane toggle folds the ONE consistent comma string
+    (dedupe, floor law) — a field missing from the pane changes nothing
+    about the fold, and combined-stand strings can no longer contradict
+    the toggles' individual state, because the pane no longer renders one."""
+    # the pane: NO select field, defaults still derive from the string stand
+    mod = _load_schema(tmp_path, monkeypatch, module_name="_t038_repr",
+                       config_json={"enabled_backends":
+                                    "base-db,state-episodic,wiki"})
+    keys = {f.key for f in mod.CONFIG_SCHEMA.fields}
+    assert "enabled_backends" not in keys, keys
+    by = _fields_by_key(mod.CONFIG_SCHEMA)
+    assert by["state-episodic_in_rack"].default == "true", by
+    assert by["wiki_in_rack"].default == "true", by
+    # the fold: the persisted raw toggle keeps maintaining the string repr
+    # (a string in, the consistent string out — never a list, never a reset)
+    home = _flat_write(tmp_path, {"enabled_backends":
+                                  "base-db,state-episodic,wiki",
+                                  "state-episodic_in_rack": "false"})
+    mr = _spec_provider()
+    prov = mr._MemrackBase()
+    prov.initialize(session_id="T038S", hermes_home=str(home))
+    assert prov._config.get("enabled_backends") == "base-db,wiki", (
+        prov._config)
+    assert isinstance(prov._config.get("enabled_backends"), str), (
+        prov._config)

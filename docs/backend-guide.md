@@ -48,13 +48,17 @@ The desktop gear pane (Plugins → memrack) renders the membership family
 from `config_schema.py`: the module computes `CONFIG_SCHEMA` AT IMPORT
 from the same config-surface seams the provider uses — one
 `<name>_in_rack` bool per backend (shipped built-ins; your dock card racks
-by presence the moment its file exists), the six static fields unchanged
-ahead of it, plus the `dock_want` select. The web server caches that
-schema per process: a dock written AFTER the backend started shows up in
-the pane only after a backend restart. The membership itself never waits
-for one — a pane toggle acts at the next `initialize()` (the persisted
-key parks/restores the card file or folds into `enabled_backends`), only
-the surface lags.
+by presence the moment its file exists) ahead of and beside the static
+base fields, plus the `dock_want` select. The switches are the pane's
+only membership UI: the `enabled_backends` dropdown left the pane (its
+comma string stays the internal store repr, maintained by the fold, and
+the setup wizard keeps its select), so a combined-stand string can no
+longer contradict the toggles' individual state. The web server caches
+that schema per process: a dock written AFTER the backend started shows
+up in the pane only after a backend restart. The membership itself never
+waits for one — a pane toggle acts at the next `initialize()` (the
+persisted key parks/restores the card file or folds into
+`enabled_backends`), only the surface lags.
 
 ### The card-recorded query bridge (fan-out rail)
 

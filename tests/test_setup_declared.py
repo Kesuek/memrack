@@ -56,21 +56,23 @@ def test_declared_schema_exists_and_is_sane():
     assert s.name == "memrack"
     assert s.storage == "flat_json"
     keys = {f.key for f in s.fields}
-    assert {"backend", "enabled_backends", "search_top_k",
+    assert {"backend", "auto_enable", "search_top_k",
             "embedding_model", "ollama_host"} <= keys
+    assert "enabled_backends" not in keys   # the toggles are the pane's
+    #                                        only membership UI; the string
+    #                                        stays internal store repr
 
 
 def test_declared_selects_are_closed_valid_sets():
-    """allowed_values must CONTAIN the default (the desktop blanks unknown values)."""
+    """allowed_values must CONTAIN the default (the desktop blanks unknown
+    values). The pane's former closed membership select (`enabled_backends`)
+    left with the toggle family — the remaining closed select is the
+    force-backend override; the membership checks are bool toggles whose
+    live contract the dynamic-surface laws pin."""
     s = _load_declared()
     by = {f.key: f for f in s.fields}
-    eb = by["enabled_backends"]
-    assert eb.kind == "select"
-    vals = {o.value for o in eb.options}
-    assert vals == {"base-db", "base-db,state-episodic",
-                    "base-db,wiki", "base-db,state-episodic,wiki"}
-    assert eb.default in vals
     be = by["backend"]
+    assert be.kind == "select"
     assert {o.value for o in be.options} == {"", "base-db", "wiki"}
     assert be.default == ""
 
