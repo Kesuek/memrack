@@ -93,6 +93,37 @@ def _config_surface_module():
     return cs
 
 
+def _docking_machine_module():
+    """The docking machine module (memrack/docking.py beside THIS file),
+    spec-path resolved and cached one-copy per process — the SAME convention
+    `_config_surface_module` carries: one machine per process, and the
+    generated-shim marker the machine stamps is consulted through IT (one
+    marker definition in the repo: the stamper decides what counts)."""
+    import sys
+    mod = sys.modules.get("memrack_docking_machine")
+    if mod is not None:
+        return mod
+    target = Path(__file__).resolve().parent / "memrack" / "docking.py"
+    spec = importlib.util.spec_from_file_location("memrack_docking_machine", target)
+    if spec is None or spec.loader is None:
+        raise ImportError("docking machine not resolvable beside the provider core")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["memrack_docking_machine"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _is_machine_shim(path) -> bool:
+    """Whether one backends.d code file carries the machine's generated-shim
+    provenance header (the remove/orphan law's trust anchor). An unresolvable
+    machine reads as not-generated — the legacy contract stands for code
+    files whose provenance cannot be checked."""
+    try:
+        return bool(_docking_machine_module().is_generated_shim(path))
+    except Exception:
+        return False
+
+
 _MEMORY_WRITE_TYPES = tuple(
     (action, EXPLICIT) for action in ("add", "patch", "replace", "remove"))
 
@@ -238,6 +269,11 @@ def _card(backend) -> dict:
         mirrors = man.get("mirror_tools")
         if isinstance(mirrors, dict) and mirrors:
             out["mirrored_tools"] = dict(mirrors)
+        if _truthy(man.get("forward_turns")):
+            # the opt-in turn gate rides the card (sparse, additive only):
+            # the status card is the surface the gate's recorded decision
+            # stays visible on (a docked provider receiving turn events).
+            out["forward_turns"] = True
         if man.get("draft"):
             out["draft"] = True
             # T-036 Addendum (3): a card with PROPOSED-Text (draft:true)
@@ -287,6 +323,17 @@ def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
             else:
                 if path.resolve() in referenced:
                     continue   # belongs to a manifest — its backend loads THERE
+                # the machine-generated dock shim is bound to its CARD, never a
+                # standalone backend: a shim left WITHOUT a referencing card
+                # (the remove law's orphan) does not resurrect the provider as
+                # a legacy drop-in — honestly reported, never silently skipped
+                if _is_machine_shim(path):
+                    result["errors"].append({
+                        "file": path.name,
+                        "error": "orphan generated dock shim ignored — no card "
+                                 "references it (the card was removed; the shim "
+                                 "does not load as a legacy drop-in)"})
+                    continue
                 backend = _load_backend_file(path)
             if from_dock:
                 # T-036: an honest docked-file marker — the membership
@@ -830,13 +877,36 @@ class _MemrackBase:
         if not (user_content or assistant_content):
             return None
         backend = self._routed_for_kind(EPISODIC)
+        out = None
         if backend is None:
             # Turns live in Hermes' state.db; memrack only records the routing fact.
             self._log_route("turn", "unstored (state.db is canonical)", "—")
-            return None
-        out = backend.on_turn(user_content, assistant_content,
-                              session_id=session_id or self._session_id)
-        self._log_route("turn", "episodic", backend.name)
+        else:
+            out = backend.on_turn(user_content, assistant_content,
+                                  session_id=session_id or self._session_id)
+            self._log_route("turn", "episodic", backend.name)
+        # the opt-in per-card turn gate (canon-keeping): the episodic route
+        # above is UNCHANGED — without the gate key a dock receives nothing,
+        # exactly as before (no silent copying of the canonical turn). A
+        # member whose card records `forward_turns` (the human-confirmed
+        # decision, forward_writes' sibling) receives the event through an
+        # isolated fan-out; a failing member is logged and the ROUTED
+        # receipt stays THE answer (single-result form, never merged).
+        for bname, member in list((getattr(self, "_rack", None) or {}).items()):
+            if member is backend:
+                continue   # the routed delivery already happened (no double)
+            man = getattr(member, "manifest", None)
+            if not isinstance(man, dict) or not _truthy(man.get("forward_turns")):
+                continue
+            fn = getattr(member, "on_turn", None)
+            if not callable(fn):
+                continue   # the optional-hook contract: a silent skip
+            try:
+                fn(user_content, assistant_content,
+                   session_id=session_id or self._session_id)
+            except Exception as exc:
+                _LOG.warning("memrack turn forward to %s failed: %s", bname, exc)
+            self._log_route("turn", "forward-gated", bname)
         return out
 
     def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
@@ -1498,6 +1568,19 @@ class _MemrackBase:
         pending = []
         for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
             if path.name.startswith("_") or path.name.startswith("disabled-"):
+                continue
+            # the containment law on the rescan's path assembly: a manifest
+            # (or symlink at a manifest name) that resolves OUTSIDE the dock
+            # directory is an honest refusal, never a pending promise
+            try:
+                contained = path.resolve().parent == dock.resolve()
+            except OSError:
+                contained = False
+            if not contained:
+                pending.append({
+                    "manifest": path.name,
+                    "note": "refused: resolves outside the dock directory "
+                            "(containment — never registered)"})
                 continue
             if path.stem not in known:
                 pending.append({"manifest": path.name, "note": "registered (next session)"})

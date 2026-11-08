@@ -214,6 +214,16 @@ def set_docked_membership(provider_name, member, *, hermes_home=None):
     if not name:
         return {"error": "docked membership toggle needs the card's name",
                 "hint": "memrack_status cards show the docked names"}
+    # the dock-name law (the machine's central validator): the park/restore
+    # renames are name-built paths — a toggle key outside the law never
+    # becomes one (controlled refusal, nothing renamed; machine doubles
+    # without the validator keep their established behaviour)
+    machine = _docking()
+    if hasattr(machine, "resolve_dock_path") and hasattr(machine, "DockNameError"):
+        try:
+            machine.resolve_dock_path(name, hermes_home=hermes_home)
+        except machine.DockNameError as exc:
+            return {"provider": name, "error": "%s" % exc}
     dock_dir = _docked_dir(hermes_home)
     wanted_off = ("disabled-%s.yaml" % name, "disabled-%s.yml" % name)
     wanted_on = ("%s.yaml" % name, "%s.yml" % name)
@@ -331,6 +341,16 @@ def dock_want_hook(config, hermes_home=None, docking=None, offers=None,
     if not choice:
         return None
     machine = docking if docking is not None else _docking()
+    # the dock-name law (the machine's central validator): a hostile select
+    # value never becomes a card path — the refusal rides the machine's own
+    # error wording, nothing is docked (older machine doubles without the
+    # validator keep their established behaviour: the machine's own refusal)
+    if hasattr(machine, "resolve_dock_path") and hasattr(machine, "DockNameError"):
+        try:
+            machine.resolve_dock_path(choice, hermes_home=hermes_home)
+        except machine.DockNameError as exc:
+            return {"provider": choice, "refused": True, "gap": "%s" % exc,
+                    "hint": "choose one of the machine's offers (dock list)"}
     dock_dir = _docked_dir(hermes_home)
     for suffix in (".yaml", ".yml"):
         if (dock_dir / ("disabled-%s%s" % (choice, suffix))).exists():
@@ -602,6 +622,17 @@ def review_card(provider_name, best_for, limits, *, hermes_home=None):
                          "the card never gets an empty claim)",
                 "provider": name}
     machine = _docking()   # the card write/reuse discipline stays the machine's
+    # the dock-name law (the machine's central validator): the review writes
+    # an EXISTING card — a name outside the law is a controlled refusal, the
+    # candidate paths are never built from traversal-shaped names (machine
+    # doubles without the validator keep their established behaviour)
+    if hasattr(machine, "resolve_dock_path") and hasattr(machine, "DockNameError"):
+        try:
+            machine.resolve_dock_path(name, hermes_home=hermes_home)
+            machine.resolve_dock_path(name, hermes_home=hermes_home, suffix=".yml")
+        except machine.DockNameError as exc:
+            return {"provider": name, "error": "%s" % exc,
+                    "hint": "memrack_status cards name the docked backends"}
     dock_dir = _docked_dir(hermes_home)
     card_path = None
     for suffix in (".yaml", ".yml"):

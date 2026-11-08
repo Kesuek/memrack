@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (249 tests green)
+## Status — v0.7.0 (272 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
