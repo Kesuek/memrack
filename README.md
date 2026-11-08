@@ -36,8 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (212 suite items: 204 passed + 3 skipped; 5 pre-existing
-vec-env REDs documented in the canonical env)
+## Status — v0.7.0 (214 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
