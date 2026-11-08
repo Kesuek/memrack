@@ -281,14 +281,21 @@ def discover_backends(hermes_home=None, enabled_builtins=None) -> dict:
         if path.name.startswith("_") or path.name.startswith("disabled-"):
             continue  # disabled-<name>.yaml = parked without deletion (bridge semantics)
         try:
+            from_dock = path.parent == dock
             if path.suffix in (".yaml", ".yml"):
                 backend = _load_manifest(path)
             else:
                 if path.resolve() in referenced:
                     continue   # belongs to a manifest — its backend loads THERE
                 backend = _load_backend_file(path)
-                if path.parent == dock:
-                    backend.built_in = False
+            if from_dock:
+                # T-036: an honest docked-file marker — the membership
+                # family (the config surface's `<name>_in_rack` toggles)
+                # distinguishes backends.d members from the shipped
+                # built-ins by THIS flag, not by card-shape heuristics
+                # (built-ins carry no built_in attr; test_router pins False).
+                backend.built_in = False
+                backend.docked_file = True
             if backend.name in result["backends"]:
                 result["errors"].append({"file": path.name,
                                          "error": "duplicate backend name %r" % backend.name})
@@ -395,7 +402,8 @@ class _MemrackBase:
         built |= (set(_DEFAULT_ENABLED) | {DEFAULT_BACKEND} |
                   set(_SHIPPED_BUILTINS))
         docked = [name for name, backend in rack.items()
-                  if not getattr(backend, "built_in", False)]
+                  if getattr(backend, "docked_file", False)
+                  or bool(getattr(backend, "manifest", None))]
         return _config_surface_module().membership_fields(
             self._config, sorted(built), docked)
 
