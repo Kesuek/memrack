@@ -71,9 +71,34 @@ def _config_surface_module():
     return cs
 
 
+def _home_from_file():
+    """The install-home derivation from THIS file's location (the
+    cross-profile law): a DEPLOYED copy lives at
+    ``<home>/plugins/memrack/config_schema.py``, so
+    ``Path(__file__).resolve().parents[2]`` is the home — accepted ONLY
+    when the sibling ``<home>/plugins/memrack`` directory exists (the
+    deployed-copy shape). A repo checkout resolves outside a plugin tree
+    and returns None: every caller falls back to ``$HERMES_HOME``/the
+    default home exactly as before (the suite's environment law)."""
+    try:
+        candidate = Path(__file__).resolve().parents[2]
+    except (IndexError, OSError, ValueError):
+        return None
+    if (candidate / "plugins" / "memrack").is_dir():
+        return candidate
+    return None
+
+
 def _hermes_home():
-    """"``$HERMES_HOME`` or the default home — the same fallback the provider
-    core's ``_hermes_home`` and the seams' ``_docked_dir`` carry."""
+    """The provider's home, in priority order: the ``__file__``-derived
+    install home (valid only for a DEPLOYED copy — wins over the
+    process-global ``$HERMES_HOME`` so a shared process never resolves one
+    profile's module against another profile's home), then ``$HERMES_HOME``,
+    then the default home. The derived step is what keeps the declared
+    gear pane's import-time scan inside the copy's OWN profile."""
+    derived = _home_from_file()
+    if derived is not None:
+        return derived
     return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 
 
@@ -205,6 +230,22 @@ _STATIC_FIELDS = (
         kind=KIND_NUMBER, default="14",
         description="Days an uninstalled dock card stays parked before card + "
                     "shim are removed (0 = immediately, -1 = never)",
+        inline=True,
+    ),
+    ProviderField(
+        key="fanout_timeout_s", label="Fan-out timeout (s)",
+        kind=KIND_NUMBER, default="5",
+        description="Per-backend hook fan-out timeout in seconds (default 5): "
+                    "a hanging backend becomes an honest gap after this "
+                    "budget, the rest of the rack still delivers",
+        inline=True,
+    ),
+    ProviderField(
+        key="prefetch_max_chars", label="Prefetch budget (chars)",
+        kind=KIND_NUMBER, default="4000",
+        description="Total character budget for the merged prefetch block "
+                    "(default 4000): longer merges truncate with an honest "
+                    "'+N chars truncated' note",
         inline=True,
     ),
 )

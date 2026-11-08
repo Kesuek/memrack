@@ -45,7 +45,39 @@ draft card carries ONE honest boundary line (`dock_boundary`): turn
 ingestion is opt-in (`forward_turns` — nothing sent to the dock unless
 gated), the prefetch rail is the rack's one fusion fan-out (automatic,
 availability-gated — NOT an opt-in), and the tool mirror + system block
-follow the card's recorded decisions.
+follow the card's recorded decisions. The session-end TRANSCRIPT is the
+card-gated channel beside them: nothing transcript-shaped reaches a dock
+unless the card records `forward_transcript: true` (human-confirmed,
+default fail-closed; the draft card's `dock_boundary` line names it, and
+the gate rides the `memrack_status` card). Draft cards also carry ONE
+honest checkpoint line — `checkpoint: not forwarded
+(pre_compress_checkpoint_api_version is not set by the rack)` — because
+memrack sets no checkpoint API version: a docked provider's fail-closed
+checkpoint guarantee cannot be claimed through memrack.
+
+### The hook fan-out is parallel and budgeted
+
+Every hook fan-out runs per-backend in parallel (`spawn_context_thread`
+under the host, a plain daemon thread hermes-less) behind a per-backend
+timeout — `fanout_timeout_s` (default 5 s): a hanging engine becomes an
+honest `engine_errors` gap naming the timeout, and the rack still delivers
+in deterministic rack order (never completion order). The merged prefetch
+block carries a total budget — `prefetch_max_chars` (default 4000) that
+truncates honestly with a `[+N chars truncated]` note. Keep hooks CHEAP:
+both limits exist for the slow/external engine you did not measure.
+
+### The initialize side-effect block is one lock
+
+The fold (persisted membership toggles), the uninstall grace and the
+dock_want consumption all park/restore card files and rewrite BOTH config
+stores — parallel runs on one home (cron, gateway, a second chat, the CLI)
+serialize behind one `fcntl.flock` on `plugin-data/memrack/init.lock`
+(generous 10 s budget, small retry polls; read paths stay unlocked). A
+home still busy after the budget skips its side effects for THAT
+initialize with an honest note (every effect is idempotent and re-runs at
+the next one); a concurrent initialize can never consume the same
+`dock_want` twice — the one-shot receipt in the store stand is the
+serialized runner's proof that the work is done.
 
 ### The dock_want select is consumed (one-shot receipt)
 
@@ -119,7 +151,11 @@ in BOTH stores (`plugins.memrack` in `config.yaml` and the flat json
 `<hermes_home>/memrack/config.json` — merge per key, atomic tmp sibling,
 0600, the host config never clobbered: a store that does not parse is
 skipped with an error, never "repaired"; a store already at the target is
-not rewritten). A re-install before the retention restores the card as
+not rewritten). When the Hermes tree is importable in the running process,
+the write rides the HOST's own config helpers (`save_config` for the yaml
+block, `atomic_json_write` for the sidecar) with the guarded in-plugin
+writers as the hermes-less fallback — the merge-per-key / atomic / 0600
+contract stands in both modes. A re-install before the retention restores the card as
 recorded, but the switch STAYS OFF — the store keeps `false` and the
 restore receipt carries "the membership switch stayed OFF — flip the
 switch to reactivate" (only when the switch reads off after the write; a

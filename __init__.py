@@ -11,6 +11,7 @@ The Basisfall is design law: with only the built-in `base-db` backend
 (stdlib-only), the whole memory works — fresh HERMES_HOME, zero docking.
 """
 
+import contextlib
 import importlib.util
 import hashlib
 import inspect
@@ -25,7 +26,14 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.7.0"
+__version__ = "0.8.0"
+
+# The initialize side-effect block's cross-process exclusivity: one flock on
+# plugin-data/memrack/init.lock with a generous busy budget, polled in small
+# steps; every side effect inside the block is idempotent, so a busy timeout
+# degrades to an honest skip, never an error.
+_SIDE_EFFECT_LOCK_TIMEOUT_S = 10.0
+_SIDE_EFFECT_LOCK_POLL_S = 0.05
 
 # Write kinds (plain strings: docked modules load via spec_from_file_location
 # and compare by VALUE, never by identity).
@@ -192,6 +200,39 @@ def _hermes_home(hermes_home=None) -> Path:
     return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 
 
+def _host_yaml_writer(home):
+    """`hermes_cli.config.save_config` — the HOST's own config.yaml writer,
+    when this process has the host tree importable AND the write targets the
+    host context's home (the host writer is home-bound to its calling
+    context; an explicit foreign ``hermes_home=`` keeps the in-plugin
+    writer, which targets exactly that home). None = unavailable
+    (hermes-less): the guarded in-plugin writers run."""
+    try:
+        from hermes_cli import config as _host_config
+        host_path = Path(_host_config.get_config_path()).resolve()
+    except Exception:
+        return None
+    if host_path.parent != Path(home).resolve():
+        return None
+    return _host_config.save_config
+
+
+def _host_json_writer():
+    """The host's atomic json sidecar writer (``utils.atomic_json_write``
+    — the real location in the host tree; ``hermes_cli.utils`` rides along
+    as the plan-named alias probe) when importable; None = hermes-less,
+    the in-plugin tmp/replace writer runs."""
+    for module_name in ("utils", "hermes_cli.utils"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        writer = getattr(module, "atomic_json_write", None)
+        if callable(writer):
+            return writer
+    return None
+
+
 def docked_dir(hermes_home=None) -> Path:
     """User-docking directory: $HERMES_HOME/plugins/memrack/backends.d/."""
     return _hermes_home(hermes_home) / "plugins" / PLUGIN_NAME / "backends.d"
@@ -274,6 +315,11 @@ def _card(backend) -> dict:
             # the status card is the surface the gate's recorded decision
             # stays visible on (a docked provider receiving turn events).
             out["forward_turns"] = True
+        if _truthy(man.get("forward_transcript")):
+            # the transcript gate's recorded decision rides the card the
+            # same way: a dock receives the session-end transcript only
+            # when THE card records it (default off).
+            out["forward_transcript"] = True
         if man.get("draft"):
             out["draft"] = True
             # T-036 Addendum (3): a card with PROPOSED-Text (draft:true)
@@ -430,6 +476,22 @@ class _MemrackBase:
                                "plugin-data/memrack/removed-cards)",
                 "default": 14,
             },
+            {
+                "key": "fanout_timeout_s",
+                "description": "Per-backend hook fan-out timeout in seconds (default 5): "
+                               "a hanging backend becomes an honest gap after this budget, "
+                               "the rest of the rack still delivers; 0 or non-numbers "
+                               "fall back to the default",
+                "default": 5,
+            },
+            {
+                "key": "prefetch_max_chars",
+                "description": "Total character budget for the merged prefetch block "
+                               "(default 4000): longer merges truncate with an honest "
+                               "'+N chars truncated' note; 0 or non-numbers fall back "
+                               "to the default",
+                "default": 4000,
+            },
         ]
         for builder in (self._membership_toggle_fields, self._dock_want_field_now):
             try:
@@ -478,6 +540,7 @@ class _MemrackBase:
         self._config = dict(config or {})
         self._session_id = ""
         self._hermes_home = None
+        self._agent_context = None
         self._rack: dict = {}
         self._cards: dict = {}
         self._parked: list = []
@@ -521,11 +584,14 @@ class _MemrackBase:
         SAME block _profile_config reads (``plugins.memrack`` in config.yaml,
         wiki-memory convention). MERGE per key, not replace: keys the wizard
         did not send (search_top_k, embedding_model, ...) survive a partial
-        write; sent keys override. The host config.yaml is written ATOMICALLY
-        (tmp file in the same directory, 0600, then os.replace) — never a
-        non-atomic direct rewrite of the live Hermes config; a crashed write
-        leaves the previous config intact. Failure = warning, never a setup
-        crash.
+        write; sent keys override. The write stays ATOMIC and 0600 in BOTH
+        modes: the HOST's own writers when the host tree is importable
+        (``hermes_cli.config.save_config`` for the config.yaml block —
+        merge_existing deep-merges the on-disk raw under this write, so no
+        un-omitted section drops — and the host's ``atomic_json_write`` for
+        the flat json sidecar), the guarded in-plugin writers otherwise
+        (tmp sibling in the same directory, 0600, os.replace). Failure =
+        warning, never a setup crash.
 
         T-036 Addendum (1) — the toggle write-path funnels HERE (both
         surfaces save through it): `<name>_in_rack` keys fold CONSISTENTLY
@@ -538,7 +604,8 @@ class _MemrackBase:
         a config key. A failing fold is a warning, the raw values still
         reach the stores."""
         values = self._fold_membership_toggles(values, hermes_home)
-        config_path = _hermes_home(hermes_home) / "config.yaml"
+        home = _hermes_home(hermes_home)
+        config_path = home / "config.yaml"
         try:
             import yaml
             existing: dict = {}
@@ -554,21 +621,42 @@ class _MemrackBase:
             prior = plugins.get(PLUGIN_NAME)
             if not isinstance(prior, dict):
                 prior = {}
-            plugins[PLUGIN_NAME] = {**prior, **dict(values or {})}
-            tmp = config_path.parent / (config_path.name + ".tmp")
-            tmp.write_text(
-                yaml.dump(existing, default_flow_style=False, allow_unicode=True),
-                encoding="utf-8")
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
-            os.replace(tmp, config_path)
+            merged = {**prior, **dict(values or {})}   # merge per key
+            host_yaml = _host_yaml_writer(config_path.parent)
+            plugins[PLUGIN_NAME] = merged   # the block lands in both write modes
+            if host_yaml is not None:
+                # the host's own writer (home-bound: the resolver only fires
+                # when the host context's home IS this home); the block pins
+                # its subtree so default-stripping can never eat the keys
+                host_yaml({"plugins": {PLUGIN_NAME: merged}},
+                          merge_existing=True,
+                          preserve_keys={("plugins", PLUGIN_NAME)})
+                try:
+                    readback = (yaml.safe_load(
+                        config_path.read_text(encoding="utf-8-sig")) or {})
+                    readback = (readback.get("plugins") or {}).get(PLUGIN_NAME)
+                except Exception:
+                    readback = None
+                if isinstance(readback, dict) and readback != merged:
+                    _LOG.warning("memrack host config write normalized %s: "
+                                 "read-back %r != written %r",
+                                 config_path, readback, merged)
+            else:
+                tmp = config_path.parent / (config_path.name + ".tmp")
+                tmp.write_text(
+                    yaml.dump(existing, default_flow_style=False,
+                              allow_unicode=True),
+                    encoding="utf-8")
+                try:
+                    os.chmod(tmp, 0o600)
+                except OSError:
+                    pass
+                os.replace(tmp, config_path)
 
             # Mirror: keep the desktop-panel source in sync (merge, 0600) —
             # otherwise the UI shows defaults instead of the state after a wizard setup.
             import json
-            flat_dir = _hermes_home(hermes_home) / PLUGIN_NAME
+            flat_dir = home / PLUGIN_NAME
             flat_dir.mkdir(parents=True, exist_ok=True)
             flat = flat_dir / "config.json"
             current = {}
@@ -579,10 +667,16 @@ class _MemrackBase:
                     current = {}
             if isinstance(current, dict):
                 current.update(dict(values or {}))
-                tmp = flat.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(current, indent=2, ensure_ascii=False),
-                               encoding="utf-8")
-                os.replace(tmp, flat)
+                host_json = _host_json_writer()
+                if host_json is not None:
+                    host_json(flat, current, mode=0o600, indent=2,
+                              ensure_ascii=False)
+                else:
+                    tmp = flat.with_suffix(".json.tmp")
+                    tmp.write_text(
+                        json.dumps(current, indent=2, ensure_ascii=False),
+                        encoding="utf-8")
+                    os.replace(tmp, flat)
                 try:
                     os.chmod(flat, 0o600)
                 except OSError:
@@ -658,6 +752,67 @@ class _MemrackBase:
                          type(exc).__name__, exc)
         return folded
 
+    # ── the initialize side-effect block's cross-process exclusivity ─────────
+    @contextlib.contextmanager
+    def _side_effect_lock(self):
+        """Cross-process exclusivity for the initialize side-effect block:
+        the fold, the uninstall grace and the dock_want consumption park/
+        restore card files and rewrite BOTH config stores — parallel runs
+        (cron, gateway, CLI, a second chat) must not race on the same
+        files. One ``fcntl.flock`` on ``plugin-data/memrack/init.lock``
+        with a generous 10 s budget (small retry polls); read paths stay
+        unlocked. Honest degrades: a lockless platform or an unwritable
+        directory yields NO exclusivity (initialize never dies — the
+        Basisfall duty), and a home still busy after the budget runs its
+        side effects SKIPPED this initialize (every one of them is
+        idempotent and re-runs at the next one) with the honest note."""
+        held = False
+        handle = None
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+        if fcntl is not None:
+            try:
+                lock_dir = Path(self._hermes_home) / "plugin-data" / PLUGIN_NAME
+                lock_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.chmod(lock_dir, 0o700)
+                except OSError:
+                    pass
+                handle = open(lock_dir / "init.lock", "a")
+                deadline = time.monotonic() + _SIDE_EFFECT_LOCK_TIMEOUT_S
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(),
+                                    fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held = True
+                        break
+                    except BlockingIOError:
+                        pass
+                    except OSError:
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(_SIDE_EFFECT_LOCK_POLL_S)
+            except OSError:
+                held = False   # an unwritable home keeps its initialize
+        if handle is None:
+            yield False
+            return
+        try:
+            yield held
+        finally:
+            if held:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+            try:
+                handle.close()
+            except Exception:
+                pass
+
     def _fold_persisted_membership_toggles(self):
         """T-037 acting law — the DECLARED surface's raw toggle keys act per
         /new. The desktop's flat writer has no provider-side fold: a gear
@@ -693,6 +848,11 @@ class _MemrackBase:
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
         kwargs.pop("hermes_home", None)  # we own this argument; no duplicate kwarg to backends
+        # the automatic-write context (the ABC contract: initialize kwargs may
+        # carry ``agent_context``): recorded once here, consulted by the
+        # memory-MIRROR write path only (cron/subagent runs stay writers-free;
+        # tool writes are decisions and stay unaffected).
+        self._agent_context = kwargs.get("agent_context")
         self._config.update(self._profile_config(self._hermes_home))   # the file wins the live keys
 
         # a re-initialize starts CLEAN: no stale gaps from a previous session, no stale force
@@ -700,69 +860,125 @@ class _MemrackBase:
         self._force = False
         self._dock_want_outcome = None
 
-        # T-037 acting law — the declared gear pane's persisted raw toggles
-        # act per /new BEFORE the discovery: the SAME fold the save path
-        # runs (built-ins → enabled_backends; docked names park/restore
-        # their card file), so a restored card racks in THIS initialize.
-        self._fold_persisted_membership_toggles()
-
-        # the UNINSTALL-GRACE, consumed BEFORE the discovery — a docked card
-        # whose provider install left the house parks immediately (honest
-        # uninstalled-at flag + kept-until note, NO dock-error spam: the
-        # parked manifest never reaches the rack), a re-installed flagged
-        # card restores without a re-probe, and the retention group removes
-        # long-expired cards with a per-file backup. A failure is a
-        # warning — the initialize racks on (the Basisfall duty).
+        # the route log lands FIRST (the side-effect block's honest notes
+        # ride it too): the plugin-data dir is idempotent and private; a
+        # broken home degrades to no log (the initialize racks on)
+        log_dir = Path(self._hermes_home) / "plugin-data" / PLUGIN_NAME
         try:
-            self._uninstalled_report = _config_surface_module() \
-                .uninstall_grace_hook(self._config, hermes_home=self._hermes_home)
-            grace = self._uninstalled_report
-            if isinstance(grace, dict):
-                if grace.get("parked") or grace.get("removed") \
-                        or grace.get("restored") or grace.get("switch_off"):
-                    _LOG.info(
-                        "memrack uninstall grace: parked=%s restored=%s "
-                        "removed=%s switch_off=%s",
-                        [p.get("provider") for p in grace.get("parked", [])],
-                        [p.get("provider") for p in grace.get("restored", [])],
-                        [p.get("provider") for p in grace.get("removed", [])],
-                        [p.get("provider") for p in
-                         grace.get("switch_off", [])])
-                if grace.get("error"):
-                    _LOG.warning("memrack uninstall grace failed: %s",
-                                 grace["error"])
-        except Exception as exc:
-            self._uninstalled_report = {
-                "error": "%s: %s" % (type(exc).__name__, exc)}
-            _LOG.warning("memrack uninstall grace hook failed: %s: %s",
-                         type(exc).__name__, exc)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(log_dir, 0o700)
+        except OSError:
+            pass
+        self._route_log = log_dir / "route_log.jsonl"
 
-        # T-036 Addendum (2), the consumption point: a set `dock_want` select
-        # runs the EXISTING docking machine here (probe + draft card + shim —
-        # the config choice IS the user decision, no heimliches Auto-Dock).
-        # It runs BEFORE the discovery below, so the fresh card racks by
-        # presence in THIS initialize. The receipt (or the machine's honest
-        # refusal) surfaces via status `dock_want_receipt`; a hook failure is
-        # an honest receipt, never an initialize crash (the Basisfall duty).
-        try:
-            self._dock_want_outcome = _config_surface_module().dock_want_hook(
-                self._config, hermes_home=self._hermes_home,
-                docking=self._docking_module())
-            outcome = self._dock_want_outcome
-            if isinstance(outcome, dict):
-                if outcome.get("refused") or outcome.get("error"):
-                    _LOG.warning("memrack dock_want %r: %s",
-                                 outcome.get("status"),
-                                 outcome.get("gap") or outcome.get("error"))
-                else:
-                    _LOG.info("memrack dock_want consumed: %s (%s)",
-                              outcome.get("status"), outcome.get("card_file"))
-        except Exception as exc:
-            self._dock_want_outcome = {
-                "refused": True,
-                "error": "dock_want hook failed: %s: %s"
-                         % (type(exc).__name__, exc)}
-            _LOG.warning("memrack dock_want hook failed: %s", exc)
+        # ── the side-effect block, cross-process serialized ────────────────
+        # The fold, the uninstall grace and the dock_want consumption park/
+        # restore card files and rewrite BOTH config stores; parallel runs on
+        # the same home serialize behind one flock here (read paths stay
+        # unlocked — the atomic tmp/replace discipline carries them). The
+        # store stand re-reads UNDER the lock, so a serialized runner keys on
+        # the winner's stand, never on its pre-lock snapshot.
+        with self._side_effect_lock() as side_effects_exclusive:
+            self._config.update(self._profile_config(self._hermes_home))
+            if not side_effects_exclusive:
+                _LOG.warning(
+                    "memrack init side-effect lock not held (home=%s) — "
+                    "fold/uninstall grace/dock_want skipped this initialize; "
+                    "they re-run idempotently at the next one",
+                    self._hermes_home)
+                try:
+                    self._log_route(
+                        "init_side_effects",
+                        "lock not held — side effects skipped this initialize",
+                        "—")
+                except Exception:
+                    pass
+            else:
+                # T-037 acting law — the declared gear pane's persisted raw
+                # toggles act per /new BEFORE the discovery: the SAME fold
+                # the save path runs (built-ins → enabled_backends; docked
+                # names park/restore their card file), so a restored card
+                # racks in THIS initialize.
+                self._fold_persisted_membership_toggles()
+                # the UNINSTALL-GRACE, consumed BEFORE the discovery — a docked card
+                # whose provider install left the house parks immediately (honest
+                # uninstalled-at flag + kept-until note, NO dock-error spam: the
+                # parked manifest never reaches the rack), a re-installed flagged
+                # card restores without a re-probe, and the retention group removes
+                # long-expired cards with a per-file backup. A failure is a
+                # warning — the initialize racks on (the Basisfall duty).
+                try:
+                    self._uninstalled_report = _config_surface_module() \
+                        .uninstall_grace_hook(self._config, hermes_home=self._hermes_home)
+                    grace = self._uninstalled_report
+                    if isinstance(grace, dict):
+                        if grace.get("parked") or grace.get("removed") \
+                                or grace.get("restored") or grace.get("switch_off"):
+                            _LOG.info(
+                                "memrack uninstall grace: parked=%s restored=%s "
+                                "removed=%s switch_off=%s",
+                                [p.get("provider") for p in grace.get("parked", [])],
+                                [p.get("provider") for p in grace.get("restored", [])],
+                                [p.get("provider") for p in
+                                 grace.get("removed", [])],
+                                [p.get("provider") for p in
+                                 grace.get("switch_off", [])])
+                        if grace.get("error"):
+                            _LOG.warning("memrack uninstall grace failed: %s",
+                                         grace["error"])
+                except Exception as exc:
+                    self._uninstalled_report = {
+                        "error": "%s: %s" % (type(exc).__name__, exc)}
+                    _LOG.warning("memrack uninstall grace hook failed: %s: %s",
+                                     type(exc).__name__, exc)
+                # the concurrent-consume guard: a serialized runner whose
+                # pre-lock snapshot carried the choice but whose fresh store
+                # stand now carries only the one-shot receipt = ANOTHER
+                # initialize consumed it while we waited for the lock — never
+                # a second probe (the stores are the shared truth).
+                choice_live = str(self._config.get("dock_want") or "").strip()
+                receipt = self._config.get("dock_want_last")
+                if choice_live and isinstance(receipt, dict) \
+                        and str(receipt.get("provider") or "").strip() == \
+                        choice_live \
+                        and "dock_want" not in (self._profile_config(
+                            self._hermes_home) or {}):
+                    self._config.pop("dock_want", None)
+                    _LOG.info("memrack dock_want: %r left the stores while "
+                              "this initialize waited on the lock — the "
+                              "receipt is on file (already consumed)",
+                              choice_live)
+                    self._log_route(
+                        "dock_want",
+                        "concurrent initialize already consumed %r (the "
+                        "receipt is in both stores) — skipped" % choice_live,
+                        "—")
+                # T-036 Addendum (2), the consumption point: a set `dock_want` select
+                # runs the EXISTING docking machine here (probe + draft card + shim —
+                # the config choice IS the user decision, no heimliches Auto-Dock).
+                # It runs BEFORE the discovery below, so the fresh card racks by
+                # presence in THIS initialize. The receipt (or the machine's honest
+                # refusal) surfaces via status `dock_want_receipt`; a hook failure is
+                # an honest receipt, never an initialize crash (the Basisfall duty).
+                try:
+                    self._dock_want_outcome = _config_surface_module().dock_want_hook(
+                        self._config, hermes_home=self._hermes_home,
+                        docking=self._docking_module())
+                    outcome = self._dock_want_outcome
+                    if isinstance(outcome, dict):
+                        if outcome.get("refused") or outcome.get("error"):
+                            _LOG.warning("memrack dock_want %r: %s",
+                                         outcome.get("status"),
+                                         outcome.get("gap") or outcome.get("error"))
+                        else:
+                            _LOG.info("memrack dock_want consumed: %s (%s)",
+                                      outcome.get("status"), outcome.get("card_file"))
+                except Exception as exc:
+                    self._dock_want_outcome = {
+                        "refused": True,
+                        "error": "dock_want hook failed: %s: %s"
+                                 % (type(exc).__name__, exc)}
+                    _LOG.warning("memrack dock_want hook failed: %s", exc)
 
         enabled = _norm_backends(self._config.get("enabled_backends"))
         if not enabled:
@@ -909,7 +1125,22 @@ class _MemrackBase:
             self._log_route("turn", "forward-gated", bname)
         return out
 
-    def on_memory_write(self, action, target, content, metadata=None, *, session_id=""):
+    def on_memory_write(self, action, target, content, metadata=None, *,
+                        session_id="", **kwargs):
+        # the memory-MIRROR suppression (the ABC's automatic-write law):
+        # automatic contexts (cron/subagent) receive no mirrored writes —
+        # this path is the host memory tool's mirror, while explicit
+        # memrack_write tool calls stay the agent's decision. An
+        # unrecorded/unknown context rides exactly as today.
+        context = kwargs.get("agent_context",
+                             getattr(self, "_agent_context", None))
+        if str(context or "").strip().lower() in _MEMRACK_MIRROR_SKIP_CONTEXTS:
+            note = ("agent_context=%s — the memory mirror is suppressed for "
+                    "automatic contexts" % context)
+            self._log_route("memory_write:skip %s" % action,
+                            "%s (%s)" % (target, note), "—")
+            _LOG.info("memrack mirror write skipped (%s): %s", action, note)
+            return {"status": "skipped", "reason": note}
         backend = self._routed_for_kind(EXPLICIT)
         if backend is None:
             return {"status": "unrouted", "reason": "no explicit-facts backend in rack"}
@@ -939,23 +1170,126 @@ class _MemrackBase:
         return out
 
     # ── provider hooks (T-031, decision (a): fan-out over the whole rack) ──
-    def _hook_fanout(self, hook, *args, **kwargs):
-        """Fan a provider hook out to EVERY rack backend: one engine's failure
-        never kills the rest (the search fan-out law — per-backend try/except,
-        errors isolated and logged). A backend without the hook is a silent
-        skip (the optional-hook contract, no warn spam)."""
-        results, engine_errors = [], []
-        for backend in (getattr(self, "_rack", None) or {}).values():
+    def _fanout_timeout_s(self) -> float:
+        """The per-backend hook budget (``fanout_timeout_s``, default 5 s):
+        a hanging engine becomes an honest gap once its budget runs out,
+        while the rest of the rack still delivers. Non-numbers and values
+        <= 0 fall back to the declared default."""
+        raw = (getattr(self, "_config", None) or {}).get("fanout_timeout_s")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return 5.0
+        return value if value > 0 else 5.0
+
+    def _prefetch_max_chars(self) -> int:
+        """The merged prefetch block's total character budget
+        (``prefetch_max_chars``, default 4000); non-numbers and values <= 0
+        fall back to the declared default."""
+        raw = (getattr(self, "_config", None) or {}).get("prefetch_max_chars")
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            return 4000
+        return value if value > 0 else 4000
+
+    @staticmethod
+    def _spawn_worker(target, name):
+        """Launch ONE hook worker: the host's ``spawn_context_thread`` when
+        the host tree is importable (it binds the spawner's contextvars, so
+        the profile scope travels with the worker — the host contract for
+        every memory-provider background job), a plain daemon thread
+        otherwise (hermes-less runs, this suite)."""
+        try:
+            from agent.memory_provider import spawn_context_thread
+        except Exception:
+            return threading.Thread(target=target, name=name, daemon=True)
+        return spawn_context_thread(target, name=name, daemon=True)
+
+    def _hook_fanout(self, hook, *args, _payload_fn=None, **kwargs):
+        """Fan a provider hook out to EVERY rack backend, in PARALLEL: each
+        member runs in its own worker thread behind a per-backend budget
+        (``fanout_timeout_s``, default 5 s) — a hanging engine becomes an
+        honest gap the moment its budget runs out and the rest of the rack
+        still delivers. Results are collected deterministically in RACK
+        order (never completion order); a member's failure stays isolated
+        (per-backend error capture — the search fan-out law) and a backend
+        without the hook is a silent skip (the optional-hook contract, no
+        warn spam). ``_payload_fn`` lets a caller reshape the per-member
+        arguments (the session-end transcript gate); it is CONSUMED here
+        and never reaches a backend hook."""
+        rack = list((getattr(self, "_rack", None) or {}).items())
+        if not rack:
+            return [], []
+        timeout = self._fanout_timeout_s()
+        slots: list = [_HOOK_UNSET] * len(rack)
+        slot_locks = [threading.Lock() for _ in rack]
+
+        def _store(index, entry) -> bool:
+            """First-write-wins slots: a LATE finisher can never overwrite a
+            collected result or the gap law (the collector's budgeted gap
+            write below stays the one unconditional write)."""
+            with slot_locks[index]:
+                if slots[index] is _HOOK_UNSET:
+                    slots[index] = entry
+                    return True
+                return False
+
+        def _capture(index, name, backend, call_args, call_kwargs):
+            try:
+                value = getattr(backend, hook, None)(*call_args, **call_kwargs)
+            except Exception as exc:
+                _store(index, ("err", {"backend": name,
+                                       "error": "%s: %s" % (type(exc).__name__, exc)}))
+                _LOG.warning("memrack backend %s hook %s failed: %s",
+                             name, hook, exc)
+            else:
+                _store(index, ("res", value))
+
+        workers = []
+        for index, (name, backend) in enumerate(rack):
             fn = getattr(backend, hook, None)
             if not callable(fn):
-                continue
-            try:
-                results.append((backend.name, fn(*args, **kwargs)))
-            except Exception as exc:
-                engine_errors.append({"backend": backend.name,
-                                      "error": "%s: %s" % (type(exc).__name__, exc)})
-                _LOG.warning("memrack backend %s hook %s failed: %s",
-                             backend.name, hook, exc)
+                continue   # the optional-hook contract: a silent skip
+            call_args, call_kwargs = args, kwargs
+            if _payload_fn is not None:
+                try:
+                    call_args, call_kwargs = _payload_fn(backend, args, kwargs)
+                except Exception as exc:
+                    slots[index] = ("err", {"backend": name,
+                                            "error": "payload gate failed: "
+                                                     "%s: %s" % (type(exc).__name__, exc)})
+                    _LOG.warning("memrack backend %s hook %s payload gate "
+                                 "failed: %s", name, hook, exc)
+                    continue
+            thread = self._spawn_worker(
+                lambda i=index, n=name, b=backend, ca=call_args,
+                ck=call_kwargs: _capture(i, n, b, ca, ck),
+                name="memrack-%s-%s" % (hook, name))
+            thread.start()
+            workers.append((index, name, thread))
+        for index, name, thread in workers:
+            thread.join(timeout)
+            if slots[index] is _HOOK_UNSET:
+                # the per-backend budget ran out: the honest gap, written
+                # unconditionally so a worker finishing microseconds later
+                # can never retroactively claim the delivery
+                slots[index] = ("err", {
+                    "backend": name,
+                    "error": "hook %r timed out after %ss (fanout_timeout_s) "
+                             "— result not collected" % (hook, timeout)})
+                _LOG.warning("memrack backend %s hook %s exceeded its %ss "
+                             "fan-out budget — result not collected",
+                             name, hook, timeout)
+        results, engine_errors = [], []
+        for index, (name, _backend) in enumerate(rack):
+            outcome = slots[index]
+            if outcome is _HOOK_UNSET:
+                continue   # the rack member never took this hook
+            if outcome[0] == "res":
+                results.append((name, outcome[1]))
+            else:
+                engine_errors.append(outcome[1])
         return results, engine_errors
 
     @staticmethod
@@ -976,8 +1310,13 @@ class _MemrackBase:
         return packed
 
     def on_session_end(self, messages=None, **kwargs):
+        # the per-card transcript gate rides the fan-out's payload step:
+        # docked members carry the transcript only on their recorded
+        # forward_transcript decision, built-ins byte-identical — the
+        # routing, isolation and packing stay exactly as before.
         results, engine_errors = self._hook_fanout(
-            "on_session_end", messages, session_id=self._session_id)
+            "on_session_end", messages, session_id=self._session_id,
+            _payload_fn=_session_end_payload)
         reached = [name for name, _ in results] + [e["backend"] for e in engine_errors]
         if reached:
             self._log_route("session_end", "fan-out", ", ".join(sorted(reached)))
@@ -1021,7 +1360,14 @@ class _MemrackBase:
                 parts.extend(str(p) for p in out if p)  # a list return flattens into the merge
             else:
                 parts.append(out)
-        return "\n\n".join(parts)
+        merged = "\n\n".join(parts)
+        budget = self._prefetch_max_chars()
+        if budget and len(merged) > budget:
+            # the honest total-budget law: the concatenation truncates AT the
+            # budget and names what was left out (the stable rack order stays)
+            merged = "%s\n\n[+%d chars truncated (prefetch_max_chars)]" % (
+                merged[:budget], len(merged) - budget)
+        return merged
 
     def system_prompt_block(self) -> str:
         results, engine_errors = self._hook_fanout("system_prompt_block")
@@ -1676,6 +2022,41 @@ _TOOL_DESCRIPTIONS = {
                            "chat-confirm revision. An unknown backend or empty texts is an "
                            "honest error; a reviewed card is drift-recheck-immun.",
 }
+
+
+_HOOK_UNSET = object()
+"""Sentinel for the parallel fan-out's per-backend slots: a slot still
+holding it means THAT member never answered within its budget (no hook, a
+loss, or the budget ran out) — the collection distinguishes all three."""
+
+
+def _is_docked_member(backend) -> bool:
+    """The membership test the config-surface family uses: docked = a card
+    member (manifest data, or a backends.d code file), never the
+    plugin-shipped built-ins."""
+    return bool(getattr(backend, "manifest", None)) or \
+        bool(getattr(backend, "docked_file", False))
+
+
+def _session_end_payload(backend, args, kwargs):
+    """The per-card transcript gate for the session-end fan-out: docked
+    members receive the session-end EVENT, and the TRANSCRIPT only when
+    their card records the human-confirmed ``forward_transcript`` decision
+    (default off — human-authored, exactly like forward_writes /
+    forward_turns; a card carrying no decision is fail-closed). Code-first
+    built-ins keep today's fan-out byte-identical: the SAME args object
+    rides through."""
+    call_args = tuple(args)
+    if not _is_docked_member(backend) or _truthy(
+            (getattr(backend, "manifest", None) or {}).get("forward_transcript")):
+        return call_args, kwargs
+    return (None,) + call_args[1:], kwargs
+
+
+_MEMRACK_MIRROR_SKIP_CONTEXTS = ("cron", "subagent")
+"""The automatic contexts (the ABC's agent_context vocabulary) the memory
+MIRROR path serves no writes to; explicit memrack_write tool calls stay the
+agent's decision whatever the context."""
 
 
 def register(ctx):

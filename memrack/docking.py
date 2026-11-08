@@ -51,6 +51,7 @@ import re
 from pathlib import Path
 
 import datetime as _dt
+import importlib
 
 PROXY_BACKEND_MODULE = "_catalog_proxy"
 """The adapter module the draft card's shim resolves to (backends/_catalog_proxy.py).
@@ -539,11 +540,21 @@ def draft_card(provider_name, probe_report):
         card["mirror_tools"] = mirror_tools
         card["mirror_decision"] = "mirror"   # the recorded decision (the derivation)
     # the honest ONE-line dock boundary (what the delivery actually does):
-    # turn ingestion is opt-in (the card's forward_turns gate), prefetch
-    # rides the rack's one fusion fan-out, mirror/block follow the card.
+    # turn ingestion is opt-in (the card's forward_turns gate), the
+    # session-end transcript is opt-in too (the forward_transcript gate —
+    # nothing transcript-shaped is sent to the dock unless the card records
+    # it), prefetch rides the rack's one fusion fan-out, mirror/block
+    # follow the card.
     card["dock_boundary"] = (
-        "turn ingestion = opt-in (forward_turns, nothing sent unless gated); "
-        "prefetch = fusion fan-out; mirror/block = card decisions")
+        "turn ingestion = opt-in (forward_turns); session-end transcript = "
+        "opt-in (forward_transcript, nothing sent unless gated); prefetch = "
+        "fusion fan-out; mirror/block = card decisions")
+    # the honest checkpoint line: the rack sets NO
+    # pre_compress_checkpoint_api_version, so a docked provider's own
+    # fail-closed checkpoint guarantee cannot be claimed THROUGH memrack
+    # (the line is card-data the review and the drift recheck never touch).
+    card["checkpoint"] = ("not forwarded (pre_compress_checkpoint_api_version "
+                          "is not set by the rack)")
     # forward_writes stays ABSENT in the draft: undecided = fail-closed
     # retrieval-only; the review records it explicitly when compatible.
     return card
@@ -1262,12 +1273,49 @@ def store_switch_state(name, *, hermes_home=None):
     return _truthy_value(value)
 
 
+def _host_yaml_writer(home):
+    """`hermes_cli.config.save_config` — the HOST's own config.yaml writer,
+    when the host tree is importable AND this write targets the host
+    context's home (the writer is home-bound to its calling context; an
+    explicit foreign home keeps the in-plugin writer). The machine's
+    writers hand the COMPLETE mutated root with merge off — the
+    fail-closed per-store refusals are decided HERE, before the host
+    writer is ever consulted. None = unavailable (hermes-less): the
+    guarded in-plugin writer runs."""
+    try:
+        from hermes_cli import config as _host_config
+        host_path = Path(_host_config.get_config_path()).resolve()
+    except Exception:
+        return None
+    if host_path.parent != Path(home).resolve():
+        return None
+    return _host_config.save_config
+
+
+def _host_json_writer():
+    """The host's atomic json sidecar writer (``utils.atomic_json_write``;
+    ``hermes_cli.utils`` rides along as an alias probe) when importable;
+    None = hermes-less, the in-plugin writer runs."""
+    for module_name in ("utils", "hermes_cli.utils"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        writer = getattr(module, "atomic_json_write", None)
+        if callable(writer):
+            return writer
+    return None
+
+
 def _write_yaml_block_key(home, key, value):
     """One key into `plugins.<plugin>` in config.yaml — the provider core's
-    save write discipline mirrored (merge per key, atomic tmp sibling in the
-    same directory, os.replace, file 0600). Fail-closed: an unreadable or
-    non-mapping root is NEVER rewritten (that would clobber the host config)
-    — {'file', 'changed'} on success, {'file', 'error'} on refusal."""
+    save write discipline mirrored (merge per key, atomic, file 0600): the
+    HOST writer when importable and this home is the host context's home
+    (complete root, merge off — the switch keys on the already-verified
+    churn state), the guarded in-plugin tmp/replace writer otherwise.
+    Fail-closed: an unreadable or non-mapping root is NEVER rewritten (that
+    would clobber the host config) — {'file', 'changed'} on success,
+    {'file', 'error'} on refusal."""
     import yaml as _yaml
     path = home / "config.yaml"
     root = {}
@@ -1288,6 +1336,12 @@ def _write_yaml_block_key(home, key, value):
     if _truthy_value(block.get(key)) == value:
         return {"file": str(path), "changed": False}
     block[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    host_writer = _host_yaml_writer(path.parent)
+    if host_writer is not None:
+        host_writer(root, merge_existing=False,
+                    preserve_keys={("plugins", _SELF)})
+        return {"file": str(path), "changed": True, "via": "host"}
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(_yaml.dump(root, default_flow_style=False,
                               allow_unicode=True), encoding="utf-8")
@@ -1301,9 +1355,10 @@ def _write_yaml_block_key(home, key, value):
 
 def _write_flat_json_key(home, key, value):
     """One key into the flat json store `<home>/<plugin>/config.json` — the
-    save write's flat-mirror half (merge per key, atomic tmp sibling,
-    os.replace, 0600). The desktop's writer owns the file: a non-mapping
-    body is left untouched fail-closed. {'file', 'changed'} / {'file', 'error'}."""
+    save write's flat-mirror half (merge per key, atomic, 0600): the HOST's
+    atomic_json_write when importable, the guarded in-plugin writer
+    otherwise. The desktop's writer owns the file: a non-mapping body is
+    left untouched fail-closed. {'file', 'changed'} / {'file', 'error'}."""
     import json as _json
     path = home / _SELF / "config.json"
     current = {}
@@ -1313,14 +1368,19 @@ def _write_flat_json_key(home, key, value):
             return {"file": str(path), "error":
                     "the flat json store carries no mapping — left untouched "
                     "(the desktop's writer owns this file)"}
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     if _truthy_value(current.get(key)) == value:
         return {"file": str(path), "changed": False}
     current[key] = value
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    host_writer = _host_json_writer()
+    if host_writer is not None:
+        host_writer(path, current, mode=0o600, indent=2, ensure_ascii=False)
+        return {"file": str(path), "changed": True, "via": "host"}
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(_json.dumps(current, indent=2, ensure_ascii=False),
                    encoding="utf-8")

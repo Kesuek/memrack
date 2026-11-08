@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.7.0 (284 tests green)
+## Status — v0.8.0 (317 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -146,6 +146,11 @@ which normalize from exactly this method) is **instance-derived**:
   uninstalled-parked dock card survives before its card + shim are removed
   (0 = immediately, -1 = never; each removed file lands as a backup under
   `plugin-data/memrack/removed-cards/`).
+- two fan-out limits beside it: `fanout_timeout_s` (default 5) — the
+  per-backend hook budget; a hanging engine answers an honest gap, the rack
+  keeps delivering — and `prefetch_max_chars` (default 4000), the total
+  character budget of the merged prefetch block (longer merges truncate
+  with an honest `[+N chars truncated]` note).
 
 Everything writes consistently at save time: toggling a built-in folds into
 `enabled_backends` (deduplicate, `base-db` as the floor is never fully
@@ -229,6 +234,27 @@ Provider hooks (`prefetch`, `system_prompt_block`, `on_session_end`,
 engine's failure stays isolated (warn log; per-backend `engine_errors` inside
 the packed multi-result dict), prompt blocks merge non-empty + dedupe with
 blank-line joins, and a single result keeps the exact pre-fanout form.
+The fan-out runs in PARALLEL since v0.8.0: every member answers in its own
+worker thread behind a per-backend budget — `fanout_timeout_s` (default 5 s;
+the desktop pane declares it). A hanging engine becomes an honest gap the
+moment its budget runs out (`engine_errors` naming the timeout) and the rest
+of the rack still delivers; results are collected deterministically in rack
+order, never in completion order. The merged `prefetch` block carries a
+total character budget — `prefetch_max_chars` (default 4000): longer merges
+truncate at the budget with an honest `[+N chars truncated]` note (stable
+rack order, the note rides the block).
+
+One data channel is gated per card: a docked member receives the
+`on_session_end` TRANSCRIPT only when its card records the human-confirmed
+`forward_transcript: true` decision (default off, same family as
+`forward_writes`/`forward_turns`). Without the recorded decision a dock
+still receives the session-end EVENT — with the transcript payload set to
+none — while code-first built-ins keep the transcript byte-identical (the
+same object, exactly as before). The gate rides the `memrack_status` card.
+Memory-MIRROR writes (the host memory tool's mirror into the rack) are
+suppressed for the automatic contexts (`agent_context` cron/subagent, per
+the ABC's initialize contract) with an honest route-log note; explicit
+`memrack_write` tool calls stay the agent's decision whatever the context.
 
 ## Design principles
 

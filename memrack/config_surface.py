@@ -24,6 +24,7 @@ file hermes-less; pyyaml is imported lazily inside the implementations,
 exactly like the docking machine does it).
 """
 
+import importlib
 import os
 from pathlib import Path
 
@@ -81,14 +82,43 @@ def _utcnow_iso():
         "%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+def _home_from_file():
+    """The install-home derivation from THIS file's location (the
+    cross-profile law): a DEPLOYED copy lives at
+    ``<home>/plugins/memrack/memrack/config_surface.py``, so
+    ``Path(__file__).resolve().parents[3]`` is the home — accepted ONLY
+    when the sibling ``<home>/plugins/memrack`` directory exists (the
+    deployed-copy shape). A repo checkout resolves a non-plugin tree and
+    returns None: every caller falls back to ``$HERMES_HOME``/the default
+    home exactly as before."""
+    try:
+        candidate = Path(__file__).resolve().parents[3]
+    except (IndexError, OSError, ValueError):
+        return None
+    if (candidate / "plugins" / "memrack").is_dir():
+        return candidate
+    return None
+
+
+def _fallback_home():
+    """``$HERMES_HOME`` or the default home — the established fallback the
+    derivation rides on (also the repo-context behavior, unchanged)."""
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
 def _docked_dir(hermes_home=None):
     """Card directory mirror ($HERMES_HOME/plugins/memrack/backends.d/) —
     the SAME path computation the docking machine and the provider core
     carry (each spec-load-independent module mirrors it; the parity is the
-    established law, pinned by tests on both existing ones)."""
+    established law, pinned by tests on both existing ones). Priority on
+    the no-argument path: the ``__file__``-derived install home (valid only
+    for the deployed-copy shape) wins over the process-global
+    ``$HERMES_HOME`` — a shared process must never serve one profile's dock
+    dir to another profile's copy; an explicit argument stays the top
+    override exactly as today."""
     if hermes_home:
         return Path(hermes_home) / "plugins" / "memrack" / "backends.d"
-    home = os.environ.get("HERMES_HOME") or Path.home() / ".hermes"
+    home = _home_from_file() or _fallback_home()
     return Path(home) / "plugins" / "memrack" / "backends.d"
 
 
@@ -315,22 +345,60 @@ def dock_want_field(offers):
 
 
 def _store_home(hermes_home=None):
-    """$HERMES_HOME resolution — the SAME fallback `_docked_dir` applies.
-    Both config stores hang beside this root, so the consumption helpers
-    keep one path computation (the machine's `_home_root` parity)."""
+    """$HERMES_HOME resolution — the SAME derivation `_docked_dir` applies
+    (deployed copy wins over the process-global ``$HERMES_HOME``, an
+    explicit argument over everything). Both config stores hang beside this
+    root, so the consumption helpers keep one path computation (the
+    machine's `_home_root` parity)."""
     if hermes_home:
         return Path(hermes_home)
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    return _home_from_file() or _fallback_home()
+
+
+def _host_yaml_writer(home):
+    """`hermes_cli.config.save_config` — the HOST's own config.yaml writer,
+    when the host tree is importable AND this write targets the host
+    context's home (the writer is home-bound to its calling context; an
+    explicit foreign home keeps the in-plugin writer). The seam writers
+    hand the COMPLETE mutated root with merge off — key REMOVALS are the
+    consumption law's substance (a partial deep-merge would resurrect the
+    cleared key), so the partial-merge mode never applies here. None =
+    unavailable (hermes-less): the guarded in-plugin writer runs."""
+    try:
+        from hermes_cli import config as _host_config
+        host_path = Path(_host_config.get_config_path()).resolve()
+    except Exception:
+        return None
+    if host_path.parent != Path(home).resolve():
+        return None
+    return _host_config.save_config
+
+
+def _host_json_writer():
+    """The host's atomic json sidecar writer (``utils.atomic_json_write``;
+    ``hermes_cli.utils`` rides along as an alias probe) when importable;
+    None = hermes-less, the in-plugin writer runs."""
+    for module_name in ("utils", "hermes_cli.utils"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        writer = getattr(module, "atomic_json_write", None)
+        if callable(writer):
+            return writer
+    return None
 
 
 def _write_yaml_store_key(home, clear_key, last_key, last):
     """Replace ONE consumed key with its one-shot receipt in the yaml store
     (`plugins.<plugin>` block) — the provider core's dual save write
     discipline mirrored (the docking machine's `_write_yaml_block_key`
-    shape): merge per key, atomic tmp sibling in the same directory,
-    os.replace, file 0600. Fail-closed: an unreadable or non-mapping root is
-    NEVER rewritten (that would clobber the host config) — {'file',
-    'changed'} on success, {'file', 'error'} on refusal."""
+    shape): merge per key, atomic, file 0600 — the HOST writer when
+    importable and this home is the host context's home, the guarded
+    in-plugin tmp/replace writer otherwise. Fail-closed: an unreadable or
+    non-mapping root is NEVER rewritten (that would clobber the host
+    config) — {'file', 'changed'} on success, {'file', 'error'} on
+    refusal."""
     import yaml
     path = home / "config.yaml"
     root = {}
@@ -352,6 +420,26 @@ def _write_yaml_store_key(home, clear_key, last_key, last):
     block.pop(clear_key, None)
     block[last_key] = dict(last)
     path.parent.mkdir(parents=True, exist_ok=True)
+    host_writer = _host_yaml_writer(path.parent)
+    if host_writer is not None:
+        # the root is COMPLETE (read + mutated here) — full replace, no
+        # partial deep-merge (that would resurrect the consumed key); the
+        # block's subtree pins through the host's default-stripping hygiene
+        host_writer(root, merge_existing=False,
+                    preserve_keys={("plugins", _SELF_NAME)})
+        try:
+            readback = (yaml.safe_load(
+                path.read_text(encoding="utf-8-sig")) or {})
+            readback = (readback.get("plugins") or {}).get(_SELF_NAME)
+        except Exception:
+            readback = None
+        if isinstance(readback, dict) and readback != block:
+            import logging
+            logging.getLogger("memrack.config_surface").warning(
+                "memrack host yaml write normalized %s: read-back %r != "
+                "written %r", path, readback, block)
+        return {"file": str(path), "changed": True, "via": "host",
+                "consumed": str(consumed) if consumed is not None else None}
     tmp = path.parent / (path.name + ".tmp")
     tmp.write_text(yaml.dump(root, default_flow_style=False,
                              allow_unicode=True), encoding="utf-8")
@@ -367,7 +455,8 @@ def _write_yaml_store_key(home, clear_key, last_key, last):
 def _write_flat_store_key(home, clear_key, last_key, last):
     """Replace ONE consumed key with its one-shot receipt in the flat json
     store `<home>/<plugin>/config.json` — the save write's flat-mirror half
-    (merge per key, atomic tmp sibling, os.replace, 0600). The desktop's
+    (merge per key, atomic, 0600) — the HOST's atomic_json_write when
+    importable, the guarded in-plugin writer otherwise. The desktop's
     writer owns the file: a non-mapping body is left untouched fail-closed.
     {'file', 'changed'} / {'file', 'error'}."""
     import json as _json
@@ -379,14 +468,20 @@ def _write_flat_store_key(home, clear_key, last_key, last):
             return {"file": str(path), "error":
                     "the flat json store carries no mapping — left untouched "
                     "(the desktop's writer owns this file)"}
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     consumed = current.get(clear_key)
     current.pop(clear_key, None)
     current[last_key] = dict(last)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    host_writer = _host_json_writer()
+    if host_writer is not None:
+        host_writer(path, current, mode=0o600, indent=2, ensure_ascii=False)
+        return {"file": str(path), "changed": True, "via": "host",
+                "consumed": str(consumed) if consumed is not None else None}
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(_json.dumps(current, indent=2, ensure_ascii=False),
                    encoding="utf-8")
