@@ -42,6 +42,37 @@ keys fail closed; `best_for`/`limits` stay human-authored (draft
 placeholders), and no probe ever overwrites a reviewed card — `--refresh`
 re-derives from a fresh probe on a provider version change instead.
 
+### The card-recorded query bridge (fan-out rail)
+
+A provider whose card records BOTH a mode claim and a `query_bridge` recipe
+becomes a fan-out rail: `memrack_search(mode=all)` reaches the docked backend
+through the bridge, and its hits ride the SAME merged pool (ranked by the
+fusion law, collapsed per target, `found_by` naming the rail). The adapter
+EXECUTES the recipe and never guesses a provider's query signature — a card
+claiming modes without a recorded bridge keeps answering an honest error.
+
+```yaml
+# backends.d/<name>.yaml (card data — authored at the dock review)
+search: [vec]              # which memrack rail the bridge serves
+query_bridge:
+  via: tool                # the execution rail (tool call)
+  tool: <original_tool>    # the provider's search-family tool, ORIGINAL name
+  query_arg: query         # args key that carries the query (default "query")
+  # args: {}               # additional static args for the tool
+  results_key: results     # list key in the tool's JSON answer (default)
+  kind: fact               # the hit kind label in the fused pool (default)
+```
+
+The bridge calls the provider's `handle_tool_call` with the ORIGINAL tool
+name (the provider never sees the mirrored namespace). Failure discipline:
+a tool that answers an `{"error": ...}` payload surfaces as an engine error
+in the `memrack_search` answer (never a silent zero); the provider's own
+abstain shape (empty results list) is an honest zero; `id`/`target`/`ts`
+fields of returned items ride along when the tool supplies them. A
+`--refresh` drift recheck NEVER erases recorded card claims it cannot
+re-derive (modes/bridge/human text survive a version hop; only a fresh probe
+that actually derives modes replaces them).
+
 ## 4 steps
 
 1. **Copy the template** `backends/_template.py` out of the repo, rename the class +

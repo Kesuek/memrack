@@ -243,6 +243,9 @@ def test_proxy_lifecycle_pass_through_keeps_provider_own_state(tmp_path):
     proxy = PROXY.CatalogProxyBackend(provider=fake)
     proxy.initialize(session_id="S1", hermes_home=str(tmp_path), provider_config={})
     assert fake.initialize_args[0] == "S1"
+    assert fake.initialize_args[1].get("hermes_home") == str(tmp_path), \
+        "initialize forwards the BINDING home (the host contract: the docked " \
+        "provider keeps its own store inside the profile home)"
     assert "initialize" in fake.calls
     proxy.shutdown()
     assert "shutdown" in fake.calls

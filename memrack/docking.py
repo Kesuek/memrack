@@ -755,8 +755,12 @@ def drift_recheck(provider_name, *, loader=None, hermes_home=None):
                 "error": report.get("error") or report.get("gap"),
                 "note": "re-probe refused (fail-closed): the card keeps its "
                         "last proven evidence; fix/remove the dock"}
-    # apply the FRESH derivation, record the revision hop, keep the human text
-    card["search"] = list(report.get("derived_search_modes") or [])
+    # apply the FRESH derivation, record the revision hop; card claims the
+    # machine does not re-derive (human-authored modes/bridge text) SURVIVE —
+    # a refresh never silently un-authors the card's retrieval claims
+    fresh_modes = list(report.get("derived_search_modes") or [])
+    if fresh_modes:
+        card["search"] = fresh_modes
     fresh_mapping = {entry["tool"]: entry["effective"]
                      for entry in (report.get("mirror_tools") or [])}
     if fresh_mapping:

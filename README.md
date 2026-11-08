@@ -36,7 +36,7 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.5.0 (180 tests green)
+## Status — v0.6.0 (190 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -80,7 +80,11 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       names follow the 64-cap chain (`memrack__<provider>__<tool>` → `mr__<p>__<t>`
       → `mr__<p>__<t>__<hash4>`, deterministic/restart-stable, collisions fail
       closed) and always sit on the `memrack_status` cards; `best_for`/`limits`
-      stay HUMAN-authored (draft placeholders)
+      stay HUMAN-authored (draft placeholders). A card may also record a
+      `query_bridge` recipe — the docked provider's search-family tool then
+      serves one `memrack_search` rail and its hits join the SAME merged pool
+      (the adapter executes the recorded recipe, never a guessed signature;
+      see `docs/backend-guide.md` "The card-recorded query bridge")
 - [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
 

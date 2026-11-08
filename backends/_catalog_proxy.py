@@ -35,6 +35,7 @@ binding happens through docking-generated shims beside the draft card
 (memrack/docking.write_draft_card), which resolve this file deterministically.
 """
 
+import json
 import sys
 import threading
 
@@ -238,7 +239,12 @@ class CatalogProxyBackend:
                     raise RuntimeError(
                         "catalog dock %r refused (fail-closed mirror registration): %s"
                         % (self.name, exc)) from exc
-        provider.initialize(session_id=session_id, **kwargs)
+        # the HOST contract binds providers with initialize(session_id,
+        # hermes_home=...): the docked provider sees the SAME binding home the
+        # rack got — its own store stays inside the profile home instead of
+        # silently falling back to its own default home.
+        provider.initialize(session_id=session_id, hermes_home=hermes_home,
+                            **kwargs)
 
     def _load_docked_provider(self):
         """The real-path loader (docking-generated bindings): resolve the
@@ -466,27 +472,119 @@ class CatalogProxyBackend:
             return None
         return fn(task, result, **kwargs)
 
-    # ── retrieval engine (query-capable probe outcome ONLY) ──
+    # ── retrieval engine (the card-recorded query bridge) ──
     def search(self, query, mode, k, session_id=""):
-        """Query-API fan-out hit source — exists but claims nothing:
-        a defined method is NOT a claim; the CARD is (the honest-claims
-        law). A generic bridge across catalog providers would need to
-        guess each provider's query signature — the Sampling-Bias-Law
-        forbids that prior; the probe records the evidence (classification
-        + query surface) and the per-provider bridge stays deliberate
-        work with a real provider in hand (the reference-dock run).
+        """Fan-out hit source through the CARD-RECORDED query bridge.
+
+        A defined method is NOT a claim — the CARD is (the honest-claims law).
+        The per-provider bridge is DELIBERATE WORK: the card records how THIS
+        provider is queried (``query_bridge``) — the adapter executes a
+        recorded recipe and never guesses a provider's query signature
+        (Sampling-Bias-Law: the probe records the retrieval evidence; the
+        card authors the claim; the review confirms it). Without a recorded
+        recipe the mode claim stays an honest error, exactly like before.
+
+        Recipe (card data, all keys optional beyond via/tool):
+
+            query_bridge:
+              via: tool            # the execution rail
+              tool: recall         # the provider's ORIGINAL tool name
+              query_arg: query     # args key carrying the query (default)
+              args: {...}          # additional static args (optional)
+              results_key: results # list key in the tool's JSON answer
+              kind: fact           # the hit kind label in the fused pool
+
+        Failure discipline (honest-degrade law): a provider tool answering an
+        error payload raises (the fan-out shows the engine error, never a
+        silent zero); the provider's own abstain shape (empty results) is an
+        honest zero.
         """
         man = getattr(self, "manifest", None)
         claimed = tuple((man or {}).get("search") or ()) if \
             isinstance(man, dict) else self.search_modes
-        if claimed:
+        if not claimed:
             raise ValueError(
-                "backend %r claims search mode(s) %r but the catalog adapter "
-                "carries no per-provider query bridge yet" % (self.name, claimed))
-        raise ValueError(
-            "backend %r carries no memrack search modes (retrieval runs over "
-            "the prefetch rail and the mirrored tools — the card says so)"
-            % self.name)
+                "backend %r carries no memrack search modes (retrieval runs over "
+                "the prefetch rail and the mirrored tools — the card says so)"
+                % self.name)
+        if mode not in claimed:
+            raise ValueError(
+                "backend %r does not carry mode %r (card claims %r)" %
+                (self.name, mode, list(claimed)))
+        if not self._available():
+            raise ValueError(
+                "backend %r is not available right now (card modes degrade, "
+                "never lie)" % self.name)
+        recipe = self._bridge_recipe()
+        if recipe is None:
+            raise ValueError(
+                "backend %r claims search mode(s) %r but the card records no "
+                "query bridge (fail-closed: the adapter never guesses a "
+                "provider's query signature)" % (self.name, list(claimed)))
+        provider = self._provider
+        if provider is None:
+            raise ValueError("backend %r has no provider bound" % self.name)
+        fn = getattr(provider, "handle_tool_call", None)
+        if not callable(fn):
+            raise ValueError(
+                "backend %r's provider does not answer tool calls" % self.name)
+        tool = str(recipe.get("tool") or "")
+        if not tool:
+            raise ValueError(
+                "backend %r's query_bridge records no tool" % self.name)
+        args = {str(recipe.get("query_arg") or "query"): str(query)}
+        args.update(dict(recipe.get("args") or {}))
+        raw = fn(tool, args, session_id=session_id)
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except ValueError as exc:
+                raise ValueError(
+                    "backend %r's bridge tool %r answered no JSON: %s"
+                    % (self.name, tool, exc)) from exc
+        else:
+            data = raw
+        if isinstance(data, dict) and data.get("error"):
+            raise ValueError(
+                "backend %r's bridge tool %r refused: %s" %
+                (self.name, tool, data.get("error")))
+        items = data.get(str(recipe.get("results_key") or "results")) \
+            if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            items = []
+        kind = str(recipe.get("kind") or "fact")
+        hits = []
+        for i, item in enumerate(items[:max(1, int(k))]):
+            if isinstance(item, str):
+                content, extra = item, {}
+            elif isinstance(item, dict):
+                content = str(item.get(str(recipe.get("content_key") or "content"))
+                              or item.get("content") or "")
+                extra = {key: item.get(key)
+                         for key in ("id", "target", "ts")
+                         if item.get(key) is not None}
+            else:
+                continue
+            if not content:
+                continue
+            hit = {"backend": self.name, "kind": kind, "rank": i + 1,
+                   "content": content}
+            hit.update(extra)
+            hits.append(hit)
+        return hits
+
+    def _bridge_recipe(self):
+        """The card's recorded query_bridge recipe, or None (fail-closed)."""
+        man = getattr(self, "manifest", None)
+        if not isinstance(man, dict):
+            return None
+        recipe = man.get("query_bridge")
+        if not isinstance(recipe, dict) or not recipe:
+            return None
+        via = str(recipe.get("via") or "tool").strip().lower()
+        if via != "tool":      # a recorded rail the executor cannot run = no bridge
+            return None
+        return recipe
 
     def card_modes(self):
         """Availability-driven modes: the card claims the manifest's derived
