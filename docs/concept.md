@@ -31,6 +31,15 @@ The tools keep the cards in-flow: `memrack_search`, `memrack_write` and
 answer, rebuilt per call from the live rack — so the agent re-checks the rack at
 every tool transition without a separate status round-trip.
 
+Docked cards have a second lifecycle state: a draft card written by the
+docking machine's probe carries **PROPOSED** `best_for`/`limits` (plain
+placeholders — the machine never authors card text) and shows on every card
+surface with `pending_confirmation: true` plus a `pending_hint` naming the
+confirm path. The agent confirms the texts in chat; `memrack_card_review`
+(backend + best_for + limits) then sets the reviewed texts VERBATIM, clears
+the draft marker and records one `chat-confirm` revision. A reviewed card is
+drift-recheck-immun: a later `--refresh` never touches human card text.
+
 Combining stores only works if the backend descriptions are honest and if the merge
 preserves both relevance (RRF over per-backend ranking) and provenance (each hit
 carries the backend it came from).

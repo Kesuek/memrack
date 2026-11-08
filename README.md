@@ -36,7 +36,8 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.6.0 (190 tests green)
+## Status — v0.7.0 (212 suite items: 204 passed + 3 skipped; 5 pre-existing
+vec-env REDs documented in the canonical env)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -87,6 +88,47 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       see `docs/backend-guide.md` "The card-recorded query bridge")
 - [x] config surfaces: CLI-wizard schema (str-convention) + desktop panel
       (`config_schema.py`, declared surface, flat_json bridge, dual-store save_config)
+- [x] config-surface for the docks (T-036): one `<name>_in_rack` membership
+      toggle per known backend (built-ins AND docked cards) + the `dock_want`
+      select (installed, inactive catalog providers) — both instance-derived
+      on the provider's config schema, both write consistently at save time
+      (built-ins fold into `enabled_backends`, docked cards park/unpark via
+      the card file); a set `dock_want` choice runs the docking machine's
+      probe flow at the next initialize (no auto-dock, the user decides)
+- [x] pending-confirmation flow: a PROPOSED (draft) dock card carries
+      `pending_confirmation: true` + a `pending_hint` on every card surface
+      (status + search/write answers); the chat confirm lands via the
+      `memrack_card_review` tool (reviewed texts set verbatim, draft cleared,
+      one chat-confirm revision, drift-recheck-immun afterwards)
+
+## Config surface — membership toggles + dock_want (T-036)
+
+memrack's config reaches the provider over TWO stores that converge in
+`save_config` (same block, one write): `plugins.memrack` in `config.yaml`
+and the desktop's flat_json `<hermes_home>/memrack/config.json` (0600).
+Since T-036 the *provider* surface (`get_config_schema()` — the CLI wizard
+`hermes memory setup memrack` AND the dashboard's provider setup modal,
+which normalize from exactly this method) is **instance-derived**:
+
+- one `<name>_in_rack` boolean select per known backend, default = the
+  current membership stand — for shipped built-ins the stand is
+  `enabled_backends` (`_norm_backends` stays the source of truth); for
+  docked catalog cards it is presence (`backends.d/<provider>.yaml` exists
+  = racked, parked `disabled-<provider>.yaml` = out until re-docked).
+- one `dock_want` select listing the installed, INACTIVE catalog memory
+  providers (the docking machine's own offer filtering) plus `""` (none).
+
+Everything writes consistently at save time: toggling a built-in folds into
+`enabled_backends` (deduplicate, `base-db` as the floor is never fully
+toggled off, wiki stays parked-by-default); toggling a docked card
+parks/restores its card FILE under the `disabled-` prefix. A set `dock_want`
+choice runs the docking machine's probe flow (isolated probe → draft card +
+binding shim) at the NEXT `initialize()` — an explicit user decision, no
+auto-dock.
+
+The static six fields on the declared desktop panel
+(gear → Plugins → memrack) stay as they are — the dynamic family lives on
+the provider surface above; both write the same dual-store block.
 
 ## Install (experimental, not yet published)
 

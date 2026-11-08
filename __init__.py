@@ -25,7 +25,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Write kinds (plain strings: docked modules load via spec_from_file_location
 # and compare by VALUE, never by identity).
@@ -41,6 +41,11 @@ DEFAULT_BACKEND = "base-db"   # the stdlib floor (the degradation law) — solo-
 # search the session history automatically; the state.db stays canonical/ro —
 # no copy, no trigger)
 _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_backends default; wiki = opt-in migration bridge
+# THE SHIPPED code-first built-ins (the backends/ dir members: base_db.py,
+# state_epi.py, wiki.py) — the pre-init wizard surface still names every
+# shipped family member (wiki is opt-in, so its toggle default renders falsy);
+# post-init the rack/parked inventory refines this set.
+_SHIPPED_BUILTINS = ("base-db", "state-episodic", "wiki")
 
 
 _SEARCH_MODES = ("fts", "vec", "pointers", "episodic")
@@ -65,6 +70,27 @@ def _norm_backends(value):
     if isinstance(value, (list, tuple)):
         return [str(v).strip() for v in value if str(v).strip()]
     return list(_DEFAULT_ENABLED)
+
+
+def _config_surface_module():
+    """The T-036 config-surface seam module (memrack/config_surface.py beside
+    THIS file), spec-path resolved and cached one-copy per process — the same
+    convention the docking machine uses. An already-loaded copy under the
+    canonical name wins: plugin hosts and test doubles exec this file
+    standalone, and sharing their object keeps one module per process (so
+    their attribute patches stay visible, too)."""
+    import sys
+    cs = sys.modules.get("memrack_config_surface")
+    if cs is not None:
+        return cs
+    target = Path(__file__).resolve().parent / "memrack" / "config_surface.py"
+    spec = importlib.util.spec_from_file_location("memrack_config_surface", target)
+    if spec is None or spec.loader is None:
+        raise ImportError("config surface not resolvable beside the provider core")
+    cs = importlib.util.module_from_spec(spec)
+    sys.modules["memrack_config_surface"] = cs
+    spec.loader.exec_module(cs)
+    return cs
 
 
 _MEMORY_WRITE_TYPES = tuple(
@@ -214,6 +240,16 @@ def _card(backend) -> dict:
             out["mirrored_tools"] = dict(mirrors)
         if man.get("draft"):
             out["draft"] = True
+            # T-036 Addendum (3): a card with PROPOSED-Text (draft:true)
+            # pends confirmation — the flags ride the card dict on EVERY
+            # surface it is served in (status cards-slot + the additive
+            # cards slots of memrack_search/memrack_write: _cards_now
+            # rebuilds through _card on every call, so every tool answer
+            # carries them). A reviewed card carries no flags.
+            try:
+                out.update(_config_surface_module().pending_flags(man))
+            except Exception as exc:
+                _LOG.warning("memrack pending flags read failed: %s", exc)
     return out
 
 
@@ -282,9 +318,19 @@ class _MemrackBase:
     def is_available(self) -> bool:
         return True
 
-    # read and written by the setup flow (`hermes memory setup memrack`)
+    # read and written by the setup flow (`hermes memory setup memrack`) and
+    # the dashboard's provider setup modal (web_server_memory normalizes
+    # from THIS method) — instanz-beziehbar since T-036
     def get_config_schema(self):
-        return [
+        """Wizard-shaped schema list. The six static fields stay additive on
+        the surface; the T-036 Addendum (1)/(2) family is appended
+        instance-derived: one `<name>_in_rack` bool toggle per known backend
+        (built-ins = rack members + parked built-ins + the two default names;
+        docked = the rack's docked cards) plus the `dock_want` select with the
+        machine's current offer list. A failing dynamic derivation degrades
+        honestly to the static fields (the setup must never crash — the
+        Basisfall keeps its exact shape)."""
+        fields = [
             {
                 "key": "backend",
                 "description": "Force ONE backend for ALL routes (migration/transition override)",
@@ -324,6 +370,47 @@ class _MemrackBase:
                 "default": 8,
             },
         ]
+        for builder in (self._membership_toggle_fields, self._dock_want_field_now):
+            try:
+                built = builder()
+                fields += list(built) if isinstance(built, list) else [built]
+            except Exception as exc:
+                _LOG.warning("memrack dynamic config fields (%s) failed: %s",
+                             getattr(builder, "__name__", "?"), exc)
+        return fields
+
+    def _membership_toggle_fields(self) -> list:
+        """The dynamic `<name>_in_rack` toggles (T-036 Addendum (1)) — the
+        built-in candidates are rack members + parked built-ins + the two
+        default names; the docked candidates are the rack's docked cards
+        (presence family). Parked dock cards reappear via the dock_want
+        re-dock, not as toggles (presence state, honest defaults)."""
+        rack = getattr(self, "_rack", None) or {}
+        built = {name for name, backend in rack.items()
+                 if getattr(backend, "built_in", False)}
+        parked = getattr(self, "_parked", None) or []
+        for entry in parked:
+            if isinstance(entry, dict) and entry.get("name"):
+                built.add(str(entry["name"]))
+        built |= (set(_DEFAULT_ENABLED) | {DEFAULT_BACKEND} |
+                  set(_SHIPPED_BUILTINS))
+        docked = [name for name, backend in rack.items()
+                  if not getattr(backend, "built_in", False)]
+        return _config_surface_module().membership_fields(
+            self._config, sorted(built), docked)
+
+    def _dock_want_field_now(self) -> dict:
+        """The dock_want select (T-036 Addendum (2)) — choices come from the
+        machine's CURRENT offer list (its own dedup filtering stays: the
+        provider never re-filters). Offers unavailable in this process →
+        the honest field with the one none choice."""
+        offers = []
+        try:
+            offers = self._docking_module().catalog_offers()
+        except Exception as exc:
+            _LOG.info("memrack dock offers unavailable here (%s: %s)",
+                      type(exc).__name__, exc)
+        return _config_surface_module().dock_want_field(offers)
 
     def __init__(self, config=None):
         self._config = dict(config or {})
@@ -337,6 +424,7 @@ class _MemrackBase:
         self._active = None
         self._force = False
         self._route_log = None
+        self._dock_want_outcome = None
         self._lock = threading.Lock()
 
     # ── lifecycle ──
@@ -374,7 +462,19 @@ class _MemrackBase:
         (tmp file in the same directory, 0600, then os.replace) — never a
         non-atomic direct rewrite of the live Hermes config; a crashed write
         leaves the previous config intact. Failure = warning, never a setup
-        crash."""
+        crash.
+
+        T-036 Addendum (1) — the toggle write-path funnels HERE (both
+        surfaces save through it): `<name>_in_rack` keys fold CONSISTENTLY
+        before the stores are written, `_norm_backends` stays the
+        source-of-truth. Built-in names fold into `enabled_backends` (the
+        config-surface update: dedupe, base-db floor absorbed, wiki stays
+        parked); docked names fold into the CARD FILE's presence (the
+        established disabled-<name>.yaml park/unpark) and their key is then
+        dropped from the written config — presence is the docked state, never
+        a config key. A failing fold is a warning, the raw values still
+        reach the stores."""
+        values = self._fold_membership_toggles(values, hermes_home)
         config_path = _hermes_home(hermes_home) / "config.yaml"
         try:
             import yaml
@@ -428,6 +528,58 @@ class _MemrackBase:
             _LOG.warning("memrack save_config failed (%s): %s",
                          config_path, exc)
 
+    def _docked_card_names(self, hermes_home) -> set:
+        """Stems of the dock cards on file (active AND parked variants) — the
+        presence family for the toggle fold in save_config (a key naming a
+        card governs the CARD FILE, not enabled_backends)."""
+        out = set()
+        dock = docked_dir(hermes_home)
+        if not dock.is_dir():
+            return out
+        for path in sorted(list(dock.glob("*.yaml")) + list(dock.glob("*.yml"))):
+            name = path.name
+            if name.startswith("_"):
+                continue
+            stem = path.stem[len("disabled-"):] if name.startswith("disabled-") \
+                else path.stem
+            if stem:
+                out.add(stem)
+        return out
+
+    def _fold_membership_toggles(self, values, hermes_home=None):
+        """The `<name>_in_rack` fold over ONE submitted values dict (pure:
+        returns the values dict the stores will receive — never the caller's
+        dict). Built-in names → `enabled_backends` via the config-surface
+        seam; docked-card names → the presence rename via
+        set_docked_membership (key dropped, presence is the state). Toggle
+        values normalize to the wizard's "true"/"false" strings when a key
+        persists, so both surfaces read one convention."""
+        folded = dict(values or {})
+        try:
+            cs = _config_surface_module()
+            docks = self._docked_card_names(_hermes_home(hermes_home))
+            for key in sorted(k for k in folded
+                              if isinstance(k, str) and k.endswith("_in_rack")):
+                name = key[: -len("_in_rack")].strip()
+                state = folded.get(key)
+                on = _truthy(state)
+                if not name:
+                    continue
+                if name in docks:
+                    report = cs.set_docked_membership(name, on,
+                                                      hermes_home=hermes_home)
+                    if isinstance(report, dict) and report.get("error"):
+                        _LOG.warning("memrack docked membership toggle %s: %s",
+                                     name, report.get("error"))
+                    folded.pop(key, None)   # presence is the state, not a key
+                else:
+                    folded = cs.merge_membership_toggle(folded, key, state)
+                    folded[key] = "true" if on else "false"
+        except Exception as exc:
+            _LOG.warning("memrack toggle fold skipped (%s: %s)",
+                         type(exc).__name__, exc)
+        return folded
+
     def initialize(self, session_id="", **kwargs):
         self._session_id = session_id or ""
         self._hermes_home = str(_hermes_home(kwargs.get("hermes_home")))
@@ -437,6 +589,34 @@ class _MemrackBase:
         # a re-initialize starts CLEAN: no stale gaps from a previous session, no stale force
         self._gaps = []
         self._force = False
+        self._dock_want_outcome = None
+
+        # T-036 Addendum (2), the consumption point: a set `dock_want` select
+        # runs the EXISTING docking machine here (probe + draft card + shim —
+        # the config choice IS the user decision, no heimliches Auto-Dock).
+        # It runs BEFORE the discovery below, so the fresh card racks by
+        # presence in THIS initialize. The receipt (or the machine's honest
+        # refusal) surfaces via status `dock_want_receipt`; a hook failure is
+        # an honest receipt, never an initialize crash (the Basisfall duty).
+        try:
+            self._dock_want_outcome = _config_surface_module().dock_want_hook(
+                self._config, hermes_home=self._hermes_home,
+                docking=self._docking_module())
+            outcome = self._dock_want_outcome
+            if isinstance(outcome, dict):
+                if outcome.get("refused") or outcome.get("error"):
+                    _LOG.warning("memrack dock_want %r: %s",
+                                 outcome.get("status"),
+                                 outcome.get("gap") or outcome.get("error"))
+                else:
+                    _LOG.info("memrack dock_want consumed: %s (%s)",
+                              outcome.get("status"), outcome.get("card_file"))
+        except Exception as exc:
+            self._dock_want_outcome = {
+                "refused": True,
+                "error": "dock_want hook failed: %s: %s"
+                         % (type(exc).__name__, exc)}
+            _LOG.warning("memrack dock_want hook failed: %s", exc)
 
         enabled = _norm_backends(self._config.get("enabled_backends"))
         if not enabled:
@@ -801,6 +981,17 @@ class _MemrackBase:
                     "provider": {"type": "string"},
                 }, "required": [], "additionalProperties": False,
             },
+            "memrack_card_review": {
+                "type": "object", "properties": {
+                    "backend": {"type": "string",
+                                "description": "the DOCKED backend's card name"},
+                    "best_for": {"type": "string",
+                                 "description": "the reviewed, final best_for text"},
+                    "limits": {"type": "string",
+                               "description": "the reviewed, final limits text"},
+                }, "required": ["backend", "best_for", "limits"],
+                "additionalProperties": False,
+            },
         }
         for name, params in our.items():
             if name not in seen:
@@ -820,6 +1011,12 @@ class _MemrackBase:
             return self._tool_import(args)
         if tool_name == "memrack_dock":
             return json.dumps(self._tool_dock(args), indent=2, ensure_ascii=False)
+        if tool_name == "memrack_card_review":
+            # T-036 Addendum (4): the chat-confirm review writer — the
+            # controlled errors are ANSWERS (honest {"error": ...}), the
+            # surface never crashes on one.
+            return json.dumps(self._tool_card_review(args), indent=2,
+                              ensure_ascii=False)
         if tool_name == self._status_tool_name():
             return json.dumps(self.status(), indent=2, ensure_ascii=False)
         # mirrored catalog tools: dispatch by the effective name the dock
@@ -926,6 +1123,21 @@ class _MemrackBase:
             return docking.dock_remove(provider, hermes_home=self._hermes_home)
         return {"error": "unknown dock action %r" % action,
                 "hint": "actions: list | offer | probe | show | refresh | remove"}
+
+    def _tool_card_review(self, args):
+        """T-036 Addendum (4): the chat-confirm review over the config-surface
+        seam — reviewed best_for/limits set VERBATIM onto the docked card,
+        draft cleared, one chat-confirm revision. Unknown backend / empty
+        texts are the controlled error ANSWER (no crash, nothing written);
+        an unexpected seam failure degrades to an honest error too."""
+        try:
+            out = _config_surface_module().review_card(
+                args.get("backend"), args.get("best_for"), args.get("limits"),
+                hermes_home=self._hermes_home)
+        except Exception as exc:
+            out = {"error": "card review failed: %s: %s"
+                           % (type(exc).__name__, exc)}
+        return out
 
     # ── search: fan-out + ONE fusion rule (the fusion law) ──
     def _tool_search(self, args):
@@ -1198,6 +1410,12 @@ class _MemrackBase:
         out: dict = {"plugin": PLUGIN_NAME, "version": __version__}
         if cards:
             out["cards"] = cards
+        # T-036 Addendum (2): the last initialize's dock_want consumption —
+        # the machine receipt or its honest refusal (surfacing choice made by
+        # the caller here; absent on a fresh pre-init or a no-choice init).
+        receipt = getattr(self, "_dock_want_outcome", None)
+        if receipt is not None:
+            out["dock_want_receipt"] = receipt
         out.update({
             "backends": sorted(self._rack),
             "gap_list": self._gaps,
@@ -1229,6 +1447,11 @@ _TOOL_DESCRIPTIONS = {
                     "the draft card), refresh after a provider update (drift-recheck), or remove "
                     "a dock. Listing/offering never docks anything — the user decides; writes go "
                     "through an explicit, decision-recorded card (fail-closed otherwise).",
+    "memrack_card_review": "Confirm one docked provider's PROPOSED card after the chat "
+                           "agreement: sets the reviewed best_for/limits texts VERBATIM "
+                           "(backend=<dock name>), clears the draft marker and records one "
+                           "chat-confirm revision. An unknown backend or empty texts is an "
+                           "honest error; a reviewed card is drift-recheck-immun.",
 }
 
 
