@@ -30,7 +30,7 @@ have.
 - write-side stays **legible**: every router decision lands in
   `$HERMES_HOME/plugin-data/memrack/route_log.jsonl`
 
-## Status — v0.5.0 (97 tests green)
+## Status — v0.5.0 (108 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -44,6 +44,9 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 - [x] Rack cards (`best_for`/`limits`/`search` — manifest data for docked, attrs for built-ins)
 - [x] `memrack_write` / `memrack_search` / `memrack_status` — agent routing,
       fan-out with RRF merge, target collapse, guided empty-hints, honest mode-errors
+- [x] in-flow cards: every `memrack_search` / `memrack_write` / `memrack_status`
+      answer carries the rack cards as an additive `cards` slot — rebuilt per
+      call from the live rack, never a stale init snapshot
 - [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked) —
       now with a page search engine (`WikiIndex`, stdlib-only: mtime-diff pass, L<n>-targets, snippets)
 - [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, incremental embed pass,

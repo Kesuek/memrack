@@ -26,6 +26,11 @@ write time** (deterministic source rules only as fallback — no LLM judge at wr
 and to **prioritize backends at read time** — not to call a unified API and hide
 the differences.
 
+The tools keep the cards in-flow: `memrack_search`, `memrack_write` and
+`memrack_status` each carry the rack cards as an additive `cards` slot in their
+answer, rebuilt per call from the live rack — so the agent re-checks the rack at
+every tool transition without a separate status round-trip.
+
 Combining stores only works if the backend descriptions are honest and if the merge
 preserves both relevance (RRF over per-backend ranking) and provenance (each hit
 carries the backend it came from).

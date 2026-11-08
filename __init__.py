@@ -384,7 +384,7 @@ class _MemrackBase:
         self._rack = rack["backends"]
         self._parked = rack["parked"]
         self._load_errors = rack["errors"]
-        self._cards = {n: _card(b) for n, b in self._rack.items()}
+        self._cards = self._cards_now()
 
         # initialize every rack member; a member that fails to init = Gap (degradation ladder),
         # but the DEFAULT/FORCED target failing is fatal (Basisfall duty).
@@ -406,7 +406,7 @@ class _MemrackBase:
         self._rack = initialized
 
         # cards rebuilt post-init (vec probe happens inside init)
-        self._cards = {n: _card(b) for n, b in self._rack.items()}
+        self._cards = self._cards_now()
 
         log_dir = Path(self._hermes_home) / "plugin-data" / PLUGIN_NAME
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -432,6 +432,13 @@ class _MemrackBase:
             # Basisfall rule: single-backend rack → go there, whatever its name
             target = next(iter(self._rack))
         return target
+
+    def _cards_now(self) -> dict:
+        """Rack cards rebuilt ON CALL from the live rack (the same logic the
+        init uses) — tool answers never serve the init-time `self._cards`
+        snapshot, so a card can never go stale within a session."""
+        rack = getattr(self, "_rack", None) or {}
+        return {n: _card(b) for n, b in rack.items()}
 
     # ── routing bookkeeping ──
     def _routed_for_kind(self, kind: str):
@@ -659,6 +666,7 @@ class _MemrackBase:
                               ensure_ascii=False)
 
         chosen = list(self._rack.values())
+        cards = self._cards_now()   # rebuilt on call — routing and answer share one source
         if backend_wish:
             if backend_wish not in self._rack:
                 return json.dumps({
@@ -673,7 +681,7 @@ class _MemrackBase:
                                "hint": "modes: all|fts|vec|pointers"}, ensure_ascii=False)
 
         runs, engine_errors = [], []
-        carried = sorted({m for b in chosen for m in self._cards[b.name]["modes"]})
+        carried = sorted({m for b in chosen for m in cards[b.name]["modes"]})
         if mode != "all" and mode not in carried:
             # the degradation law Degradation: a specifically requested mode that NO backend
             # in the rack carries is an honest error — never a silent zero-result.
@@ -682,13 +690,13 @@ class _MemrackBase:
                 "hint": "available modes: %s" % (", ".join(carried) or "none"),
             }, ensure_ascii=False)
         for backend in chosen:
-            modes = [m for m in requested if m in tuple(self._cards[backend.name]["modes"])]
+            modes = [m for m in requested if m in tuple(cards[backend.name]["modes"])]
             if not modes:
                 if backend_wish:
                     return json.dumps({
                         "error": "backend %r does not carry mode %r" % (backend.name, mode),
                         "hint": "available modes: %s" % ", ".join(
-                            self._cards[backend.name]["modes"] or ["none"]),
+                            cards[backend.name]["modes"] or ["none"]),
                     }, ensure_ascii=False)
                 continue
             for m in modes:
@@ -713,6 +721,8 @@ class _MemrackBase:
             hint += " Try mode 'vec' (paraphrases) or 'pointers' (directory);"
             hint += " broader phrasing helps too."
             result["hint"] = hint
+        if cards:   # additive in-flow slot: the rack cards, rebuilt fresh
+            result["cards"] = cards
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     @staticmethod
@@ -846,10 +856,15 @@ class _MemrackBase:
             }, ensure_ascii=False)
         try:
             result = write_fn(kind, content, tags=tags, session_id=self._session_id)
+            assert isinstance(result, dict), "backend write must report a dict"
         except Exception as exc:
             return json.dumps({"error": "write failed: %s: %s" % (type(exc).__name__, exc)},
                               ensure_ascii=False)
         self._log_route("memrack_write", kind, backend.name)
+        result = dict(result)
+        cards = self._cards_now()   # additive in-flow slot: the rack cards, rebuilt fresh
+        if cards:
+            result["cards"] = cards
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     def _rescan_dock(self) -> list:
@@ -870,10 +885,11 @@ class _MemrackBase:
 
     # ── inventory ──
     def status(self) -> dict:
-        return {
-            "plugin": PLUGIN_NAME,
-            "version": __version__,
-            "cards": self._cards,
+        cards = self._cards_now()   # rebuilt on call — never the init snapshot
+        out: dict = {"plugin": PLUGIN_NAME, "version": __version__}
+        if cards:
+            out["cards"] = cards
+        out.update({
             "backends": sorted(self._rack),
             "gap_list": self._gaps,
             "parked": self._parked,
@@ -883,7 +899,8 @@ class _MemrackBase:
             "enabled_builtins": self._config.get("enabled_backends", list(_DEFAULT_ENABLED)),
             "pending_docks": self._rescan_dock(),
             "session_id": self._session_id,
-        }
+        })
+        return out
 
 
 _TOOL_DESCRIPTIONS = {
