@@ -89,19 +89,20 @@ def test_stage1b_init_failure_in_docked_backend(tmp_path):
 
 
 def test_stage2_vec_off_is_card_note_not_error(tmp_path):
-    """the degradation and honest-error laws: vec without engine → card without 'vec', fts runs, vec request = honest error."""
-    prov = mr._MemrackBase(config={"embedding_model": "model-gibt-es-nicht"})
+    """Split: the floor card carries fts+pointers ONLY — base-db's export carries
+    no vec truth at all; memrack_search(mode='vec') without the vec membership
+    = the provider's honest error (never a silent zero)."""
+    prov = mr._MemrackBase()
     prov.initialize(session_id="S1", hermes_home=str(tmp_path))
     st = json.loads(prov.handle_tool_call("memrack_status", {}))
     card = st["cards"]["base-db"]
-    assert "vec" not in card["modes"]                              # card without vec (card_modes, honest)
-    assert prov._rack["base-db"].export()["vec"] is False          # gap visible in the inventory
+    assert "vec" not in card["modes"]                     # floor card: fts+pointers only
+    assert "vec" not in prov._rack["base-db"].export()    # no vec truth on the floor
     prov.handle_tool_call("memrack_write", {"content": "Fakt für fts"})
     solo = json.loads(prov.handle_tool_call("memrack_search", {"query": "Fakt für fts", "mode": "fts"}))
-    assert solo["results"] != []
+    assert solo["results"] != [] and solo["engine_errors"] == []
     ev = json.loads(prov.handle_tool_call("memrack_search", {"query": "x", "mode": "vec"}))
-    assert "error" in ev   # specific mode = honest error, no silent zero
-
+    assert "error" in ev   # mode without a carrying backend = honest error, no silent zero
 
 def test_stage3_readonly_home_fails_closed(tmp_path):
     """the degradation law (pinned): read-only plugin-data → init fails honestly →

@@ -36,7 +36,16 @@ have.
   provider's tools surface mirrored under memrack-namespace names — the provider
   never talks to the host directly
 
-## Status — v0.8.0 (317 tests green)
+## Built-in backends
+
+| backend | modes | what it is |
+|---|---|---|
+| base-db | fts + pointers | the tabular floor: atomic facts, hash-dedupe, FTS5 (stdlib-only, zero network) |
+| wiki | fts | whole-page knowledge (opt-in park/unpark) |
+| state-episodic | episodic | read-only search over the host session history |
+| **vec** (opt-in) | vec | semantic recall over the fact ledger — sqlite-vec + a local OpenAI-compatible embedder; own store (`plugin-data/memrack/vec-index.db`), ledger attached read-only; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off; one-time legacy-embedding import on first enable |
+
+## Status — v0.9.0 (318 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search

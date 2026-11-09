@@ -59,10 +59,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pointers_fts USING fts5(
 """
 
 
-# The vec table is created DYNAMICALLY at initialize with the dimension probed from the
-# configured embedding model (facts_vec: rowid = the fact id it indexes).
-
-
 class BaseDbBackend:
     name = PLUGIN_NAME
     best_for = "atomic facts + mirror of memory-writes; exact recall in milliseconds"
@@ -72,24 +68,16 @@ class BaseDbBackend:
     # the write-kind vocabulary — legacy input "curation" is tolerated and normalized to "curated"
     write_types = ("explicit", "curated")
 
-    _EMBED_MODEL = "nomic-embed-text"
-    _OLLAMA_HOST = "http://127.0.0.1:11434"
-
     def __init__(self):
         self._db: sqlite3.Connection | None = None
         self._path: Path | None = None
         self._lock = threading.Lock()
         self._provider_config: dict = {}
-        self._vec_ok = False
-        self._vec_gap = "not probed yet"
-        self._vec_batch = 32
+        pass
 
     # ── lifecycle ──
     def initialize(self, session_id="", hermes_home=None, provider_config=None, **kwargs):
         self._provider_config = dict(provider_config or {})
-        self._EMBED_MODEL = self._provider_config.get("embedding_model") or self._EMBED_MODEL
-        self._OLLAMA_HOST = self._provider_config.get("ollama_host") or self._OLLAMA_HOST
-        self._vec_batch = self._read_vec_batch()
         base = Path(hermes_home or (Path.home() / ".hermes")) / "plugin-data" / "memrack"
         base.mkdir(parents=True, exist_ok=True)
         try:
@@ -104,25 +92,6 @@ class BaseDbBackend:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA busy_timeout=3000")
             self._db.commit()
-        # vec capability probe: optional upgrade — degrade to fts-only with a visible gap
-        self._vec_ok = self._vec_probe()
-        if self._vec_ok:
-            try:
-                import sqlite_vec
-                self._db.enable_load_extension(True)   # python builds must authorize the load first
-                sqlite_vec.load(self._db)
-                self._db.enable_load_extension(False)
-                with self._lock:
-                    self._adopt_or_create_vec_table(self._vec_dimension())
-                    self._db.commit()
-                if not self._vec_ok:
-                    return   # dimension mismatch — honest gap already recorded
-                _LOG.info("base-db vec engine ready (%s)", self._EMBED_MODEL)
-            except (sqlite3.OperationalError, AttributeError) as exc:
-                # build without extension support / locked loader — honest degrade, never crash the floor
-                self._vec_ok = False
-                self._vec_gap = "extension load failed: %s" % exc
-                _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
 
     def _fts_rebuild(self):
         """Index refresh in a pass (after each write batch), NOT per trigger — the episodic law."""
@@ -179,141 +148,8 @@ class BaseDbBackend:
             self._db.commit()
 
 
-    # ── vec engine (optional upgrade; the degradation law degradation ladder) ──
     def card_modes(self):
-        """DYNAMIC modes: the card the provider shows reflects the environment honestly."""
-        return ("fts", "pointers") + (("vec",) if self._vec_ok else ())
-
-    def _read_vec_batch(self) -> int:
-        """Backfill batch from the provider config (wizard writes strings) — default 32."""
-        try:
-            batch = int(self._provider_config.get("vec_backfill_batch") or 32)
-        except (TypeError, ValueError):
-            batch = 32
-        return max(1, batch)
-
-    def _vec_dimension(self):
-        """Derive the embedding dimension from ONE model probe — the table is sized by
-        the CONFIGURED model, never by a hard-coded default. A probe failure degrades
-        honestly (gap + no vec); it does not fall back to a guessed dimension."""
-        try:
-            vecs = self._embed(["memrack dimension probe"])
-        except Exception as exc:
-            self._vec_gap = "dimension probe failed: %s: %s" % (type(exc).__name__, exc)
-            return None
-        if not vecs or not vecs[0]:
-            self._vec_gap = "dimension probe returned no embedding"
-            return None
-        return len(vecs[0])
-
-    def _adopt_or_create_vec_table(self, dim):
-        """Fresh store: create facts_vec at the probed dimension. Existing store: sanity-check
-        the table against the probed model — a row-backed mismatch degrades AT INIT with an
-        honest gap instead of failing inserts silently at search time."""
-        assert self._db is not None
-        if dim is None:
-            self._vec_ok = False
-            return
-        exists = self._db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_vec'").fetchone()
-        if exists is None:
-            self._db.executescript(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(embedding float[%d]);" % dim)
-            return
-        existing = self._db.execute(
-            "SELECT vec_length(embedding) FROM facts_vec LIMIT 1").fetchone()
-        if existing and existing[0] is not None and int(existing[0]) != dim:
-            self._vec_ok = False
-            self._vec_gap = ("vec dimension mismatch: facts_vec expects %s, "
-                             "model %r produces %d" % (existing[0], self._EMBED_MODEL, dim))
-            _LOG.warning("base-db vec engine degraded to fts-only: %s", self._vec_gap)
-
-    def _vec_probe(self):
-        try:
-            import sqlite_vec  # noqa: F401
-        except ImportError:
-            self._vec_gap = "sqlite-vec package not installed (optional dep)"
-            return False
-        try:
-            import urllib.request, json as _json
-            with urllib.request.urlopen(
-                    self._OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=1) as resp:
-                tags = _json.load(resp)
-        except Exception as exc:
-            self._vec_gap = "%s not reachable: %s" % (self._OLLAMA_HOST, exc)
-            return False
-        names = [str(m.get("name", "")).split(":")[0] for m in tags.get("models", [])]
-        if self._EMBED_MODEL not in names:
-            self._vec_gap = "embedding model %r not pulled (ollama list)" % self._EMBED_MODEL
-            return False
-        return True
-
-    def _embed(self, texts):
-        import urllib.request, json as _json
-        body = _json.dumps({"model": self._EMBED_MODEL, "input": list(texts)}).encode("utf-8")
-        req = urllib.request.Request(
-            self._OLLAMA_HOST.rstrip("/") + "/api/embed", data=body,
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = _json.load(resp)
-        return list(data.get("embeddings") or [])
-
-    def _vec_index_missing(self):
-        """Index-refresh pass, part 1: embed facts lacking a vector — incremental, batched.
-        Returns (indexed, backlog): backlog = rows STILL missing a vector after this batch,
-        surfaced as a note (no silent incompleteness impression)."""
-        import sqlite_vec
-        assert self._db is not None
-        with self._lock:
-            backlog = self._db.execute(
-                "SELECT COUNT(*) FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
-                " WHERE v.rowid IS NULL").fetchone()[0]
-            if not backlog:
-                return 0, 0
-            rows = self._db.execute(
-                "SELECT f.id, f.content FROM facts f LEFT JOIN facts_vec v ON v.rowid = f.id"
-                " WHERE v.rowid IS NULL ORDER BY f.id LIMIT ?", (self._vec_batch,)).fetchall()
-        ids = [r[0] for r in rows]
-        vecs = self._embed([r[1] for r in rows])       # network call OUTSIDE the lock
-        if len(vecs) != len(rows):
-            raise RuntimeError("embedding count mismatch: %d != %d" % (len(vecs), len(rows)))
-        try:
-            with self._lock:
-                self._db.executemany(
-                    "INSERT INTO facts_vec(rowid, embedding) VALUES(?, ?)",
-                    [(rid, sqlite_vec.serialize_float32(v)) for rid, v in zip(ids, vecs)])
-                self._db.commit()
-        except sqlite3.OperationalError as exc:
-            # e.g. a dimension mismatch against the model — honest degrade, never a silent fail
-            self._vec_ok = False
-            self._vec_gap = "vec insert failed (%s): %s" % (type(exc).__name__, exc)
-            _LOG.warning("base-db vec engine degraded to fts-only: %s", exc)
-            raise ValueError("vec disabled: %s" % self._vec_gap) from exc
-        return len(rows), backlog - len(rows)
-
-    def _vec_knn(self, query, k):
-        import sqlite_vec
-        q_vecs = self._embed([query])                  # network call OUTSIDE the lock
-        assert self._db is not None, "not initialized"
-        if not q_vecs:
-            return []
-        qvec = sqlite_vec.serialize_float32(q_vecs[0])
-        hits = []
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT rowid, distance FROM facts_vec WHERE embedding MATCH ? AND k = ?",
-                (qvec, k)).fetchall()
-            for i, (rid, dist) in enumerate(rows, 1):
-                row = self._db.execute(
-                    "SELECT content, target, ts, hits FROM facts WHERE id=?", (rid,)).fetchone()
-                if row:
-                    # `id` = the fact rowid: the provider's touch burns HEAT into semantic hits
-                    hits.append({"backend": self.name, "kind": "fact", "id": rid, "rank": i,
-                                 "content": row[0],
-                                 "target": row[1] or "base-db:%d" % rid, "ts": row[2],
-                                 "hits": row[3],
-                                 "distance": round(float(dist), 4)})
-        return hits
+        return ("fts", "pointers")
 
     def search(self, query, mode, k):
         """Ranked hits per the retrieval tools.2. 'fts' = facts, 'pointers' = directory. No 'vec' yet."""
@@ -338,15 +174,6 @@ class BaseDbBackend:
             hits = [{"backend": self.name, "kind": "pointer", "rank": i + 1,
                      "content": "%s -> %s" % (r[0], r[1]), "target": "pointer:%s" % r[1],
                      "ts": r[3]} for i, r in enumerate(rows)]
-        elif mode == "vec":
-            if not self._vec_ok:
-                raise ValueError("vec not available: %s" % self._vec_gap)
-            indexed, backlog = self._vec_index_missing()   # inline pass on the first vec query
-            hits = self._vec_knn(query, k)
-            if backlog:                        # the honest incompleteness note on every hit
-                for h in hits:
-                    h["_vec_backlog"] = backlog
-            return hits
         else:
             raise ValueError("this engine carries mode %r not (modes: %s)"
                              % (mode, list(self.card_modes())))
@@ -472,7 +299,6 @@ class BaseDbBackend:
                             "candidates": candidates}
             if gone:
                 self._db.executemany("DELETE FROM facts WHERE id=?", [(i,) for i, _t, _c in gone])
-                self._prune_facts_vec([i for i, _t, _c in gone])
                 self._fts_rebuild()      # cold path: rebuild after a batch delete
                 self._db.commit()
         report_rows = [{"target": t or "base-db:%d" % i, "content": c[:80]}
@@ -482,18 +308,6 @@ class BaseDbBackend:
                     "removed": 0, "rows": []}
         return {"status": "removed", "needle": needle, "match": match,
                 "removed": len(gone), "rows": report_rows}
-
-    def _prune_facts_vec(self, ids):
-        """Vector cleanup at delete — the fix for fact-id reuse on stores created BEFORE
-        the AUTOINCREMENT schema (works on every existing store). Best-effort: the table
-        exists only where the vec engine ever initialized; there is no fact_id column —
-        the vec0 rowid IS the fact id."""
-        assert self._db is not None
-        if not ids:
-            return
-        if self._db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_vec'").fetchone():
-            self._db.executemany("DELETE FROM facts_vec WHERE rowid=?", [(i,) for i in ids])
 
     def on_session_end(self, messages, *, session_id=""):
         """No automated consolidation here (the dreaming lesson is the project law)."""
@@ -529,7 +343,6 @@ class BaseDbBackend:
         return {"name": self.name, "best_for": self.best_for, "limits": self.limits,
                 "search": list(self.card_modes()), "write": self.writeable,
                 "built_in": True, "facts": facts, "pointers": pointers,
-                "vec": self._vec_ok, "vec_gap": None if self._vec_ok else self._vec_gap,
                 "db": str(self._path) if self._path else None}
 
 

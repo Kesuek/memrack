@@ -294,3 +294,27 @@ file mtimes, `pointer`-kind hits. Copy it to backends.d/ + manifest to use.
 - SQLite extension load needs `enable_load_extension(True)` before `sqlite_vec.load`.
 - A locked method calling a locked method = deadlock — the base uses an RLock.
 - `load_memory_provider` fresh-instantiates with skills off unless you ask.
+
+
+## The vec backend (the split)
+
+base-db is the tabular floor: facts, pointers, FTS5 — stdlib-only, no network,
+no embedding calls, no cold start. Semantic recall lives in the built-in
+`vec` backend (opt-in over the `vec_in_rack` toggle):
+
+- own store: `plugin-data/memrack/vec-index.db` (rowid = fact id, meta carries
+  model/dimension); the fact ledger (memrack.db) is attached READ-ONLY for
+  harvest and content joins — the ledger is never mutated except the shared
+  heat counter (`touch`), which is metadata, not fact content.
+- availability: embedder probe at init (ollama tags + model presence); without
+  a live embedder the card degrades honestly (no vec promise) and the rack
+  keeps answering fts/pointers/episodic.
+- harvest: incremental, batched (`vec_backfill_batch`); backlog surfaces
+  honestly on every hit (`_vec_backlog`); removed fact ids are tombstoned out
+  of the index on the next pass.
+- search: `mode='vec'` without membership = an honest error with the available
+  modes; the cold start after a restart lives here (the model load), warm
+  queries measure in the hundreds of ms.
+- legacy: a `facts_vec` table left inside memrack.db from the pre-split era is
+  imported ONE TIME on first enable (read-only attach) and stays in place,
+  unused, as documented residue.

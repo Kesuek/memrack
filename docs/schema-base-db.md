@@ -48,7 +48,7 @@ when `col` names a real index column; stray colons in plain queries
 transaction per search, and vec hits carry the fact `id`, so semantic
 results burn heat too (one commit per search, never per row).
 
-## Deletes and the optional vec table
+## Deletes and the removed vec table (historical, pre-split stores)
 
 Every delete removes by EXACT identity first (dedupe hash OR the per-entry
 `builtin:<src>#<hash8>` target); a needle that matches nothing falls back to

@@ -118,7 +118,8 @@ def test_declared_schema_carries_live_membership_toggles(tmp_path, monkeypatch):
     # the family appended additively: toggles + dock_want, static order kept
     assert _STATIC_KEYS == tuple(f.key for f in mod.CONFIG_SCHEMA.fields[:5])
     for name, expect in (("base-db", "true"), ("limbic", "true"),
-                         ("state-episodic", "true"), ("wiki", "false")):
+                         ("state-episodic", "true"), ("vec", "false"),
+                         ("wiki", "false")):
         field = by["%s_in_rack" % name]
         assert field.kind == "bool", field
         assert field.default == expect, (name, field)
@@ -127,7 +128,7 @@ def test_declared_schema_carries_live_membership_toggles(tmp_path, monkeypatch):
     # restart-stable order law reused from the seams (sorted by name)
     assert _toggle_keys(mod.CONFIG_SCHEMA) == [
         "base-db_in_rack", "limbic_in_rack", "state-episodic_in_rack",
-        "wiki_in_rack"], _toggle_keys(mod.CONFIG_SCHEMA)
+        "vec_in_rack", "wiki_in_rack"], _toggle_keys(mod.CONFIG_SCHEMA)
     # the dock_want select with the none choice first (offers may include the
     # Hermes tree's bundled providers — tolerant against environment)
     dw = by["dock_want"]
@@ -145,11 +146,13 @@ def test_declared_schema_without_docks_is_builtins_only(tmp_path, monkeypatch):
     mod = _load_schema(tmp_path, monkeypatch, module_name="_t037_no_docks",
                        config_json={})
     keys = _toggle_keys(mod.CONFIG_SCHEMA)
+    keys = _toggle_keys(mod.CONFIG_SCHEMA)
     assert keys == ["base-db_in_rack", "state-episodic_in_rack",
-                    "wiki_in_rack"], keys
+                    "vec_in_rack", "wiki_in_rack"], keys
     by = _fields_by_key(mod.CONFIG_SCHEMA)
     assert by["state-episodic_in_rack"].default == "true", by
     assert by["wiki_in_rack"].default == "false", by
+    assert by["vec_in_rack"].default == "false", by
     # the path parity law: the module's dock dir is the SAME path the seams
     # resolve (config_surface._docked_dir)
     cs = sys.modules["memrack_config_surface"]

@@ -26,7 +26,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 # The initialize side-effect block's cross-process exclusivity: one flock on
 # plugin-data/memrack/init.lock with a generous busy budget, polled in small
@@ -53,7 +53,7 @@ _DEFAULT_ENABLED = ("base-db", "state-episodic")   # plugins.memrack.enabled_bac
 # state_epi.py, wiki.py) — the pre-init wizard surface still names every
 # shipped family member (wiki is opt-in, so its toggle default renders falsy);
 # post-init the rack/parked inventory refines this set.
-_SHIPPED_BUILTINS = ("base-db", "state-episodic", "wiki")
+_SHIPPED_BUILTINS = ("base-db", "state-episodic", "wiki", "vec")
 
 
 _SEARCH_MODES = ("fts", "vec", "pointers", "episodic")

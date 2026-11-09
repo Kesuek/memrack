@@ -52,18 +52,25 @@ def _engine(tmp_path):
     return prov._active
 
 
-def _vec_engine(tmp_path, monkeypatch, dim=4, batch=None, sid="R3V1"):
-    """base-db engine with the vec engine FORCED on (probe True, fake embeddings)."""
-    eng = BASE_DB.BaseDbBackend()
-    monkeypatch.setattr(eng, "_vec_probe", lambda: True)
+def _vec_on(tmp_path, monkeypatch, dim=4, batch=None, sid="R3V1"):
+    """Floor ledger (base-db writes into its memrack.db) + the new VecBackend
+    with the probe FORCED on and fake embeddings (the split: the vec engine
+    harvests the ledger read-only; base-db never embeds again)."""
+    led = _engine(tmp_path)
+    vecspec = importlib.util.spec_from_file_location(
+        "memrack_backends_vec", pathlib.Path(_ROOT / "backends" / "vec.py"))
+    VEC = importlib.util.module_from_spec(vecspec)
+    vecspec.loader.exec_module(VEC)
+    vb = VEC.VecBackend()
+    monkeypatch.setattr(vb, "_probe", lambda: True)
 
     def _embed(texts, dim=dim):
         return [[float(len(t)) % 7 / 7, 0.5, 0.25] + [0.0] * (dim - 3) for t in texts]
 
-    monkeypatch.setattr(eng, "_embed", _embed)
+    monkeypatch.setattr(vb, "_embed", _embed)
     cfg = {"vec_backfill_batch": str(batch)} if batch else {}
-    eng.initialize(session_id=sid, hermes_home=str(tmp_path), provider_config=cfg)
-    return eng
+    vb.initialize(session_id=sid, hermes_home=str(tmp_path), provider_config=cfg)
+    return led, vb
 
 
 # ── 5) floor: base-db mounts with a SINGLE non-base entry ───────────────────
@@ -229,73 +236,95 @@ def test_remove_released_rowid_not_reused_on_fresh_store(tmp_path):
 
 
 def test_remove_prunes_facts_vec(tmp_path, monkeypatch):
-    eng = _vec_engine(tmp_path, monkeypatch)
-    eng.write("explicit", "the prune target fact text")
-    eng.search("the prune target", "vec", 8)
-    assert eng._db.execute("SELECT COUNT(*) FROM facts_vec").fetchone()[0] == 1
-    out = eng.on_memory_write("remove", "memory", "the prune target fact text")
+    """The split: base-db deletes the ledger row; the vec backend's own
+    tombstone pass prunes the stale vector from ITS store."""
+    led, vb = _vec_on(tmp_path, monkeypatch)
+    led.write("explicit", "the prune target fact text")
+    vb.search("the prune target", "vec", 8)               # harvest pass: 1 indexed
+    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 1
+    out = led.on_memory_write("remove", "memory", "the prune target fact text")
     assert out["removed"] == 1
-    assert eng._db.execute("SELECT COUNT(*) FROM facts_vec").fetchone()[0] == 0
+    vb._harvest()                                          # the vec backend's tombstone pass
+    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 0
 
 
 # ── 3) vec hits carry the id, dimension probe, backfill batch ───────────────
 
 def test_vec_hits_carry_fact_id(tmp_path, monkeypatch):
-    eng = _vec_engine(tmp_path, monkeypatch)
-    r = eng.write("explicit", "semantic heat probe fact here")
-    hits = eng.search("semantic heat probe", "vec", 8)
+    led, vb = _vec_on(tmp_path, monkeypatch)
+    r = led.write("explicit", "semantic heat probe fact here")
+    hits = vb.search("semantic heat probe", "vec", 8)
     assert hits and hits[0]["id"] == r["id"], "vec hits must carry the fact rowid for touch"
 
 
 def test_semantic_hits_burn_heat(tmp_path):
-    eng = _engine(tmp_path)
-    eng.on_memory_write("add", "memory", "fusion heat probe entry")
-    hits = eng.search("fusion heat", "fts", 8)
-    merged = [{**h, "id": (h.get("id") or r["id"]), "backend": "base-db"}  # vec-shaped hit
-              for h, r in zip(hits, [eng._db.execute("SELECT id FROM facts").fetchone()])]
+    """Hits carrying the fact rowid burn LEDGER heat — through the vec backend's
+    touch (the shared heat counter is metadata, not fact content)."""
+    led = _engine(tmp_path)
+    led.on_memory_write("add", "memory", "fusion heat probe entry")
+    vecspec = importlib.util.spec_from_file_location(
+        "memrack_backends_vec2", pathlib.Path(_ROOT / "backends" / "vec.py"))
+    VEC = importlib.util.module_from_spec(vecspec)
+    vecspec.loader.exec_module(VEC)
+    vb = VEC.VecBackend()
+    vb.initialize(session_id="H", hermes_home=str(tmp_path))
+    led.write("explicit", "fusion heat probe entry")      # the ledger row for the join
+    hits = [{"backend": "vec", "kind": "fact", "id": 1}, # a merged vec-ish hit carrying the id
+            ]
     prov = mr._MemrackBase()
-    prov.initialize(session_id="H", hermes_home=str(tmp_path))
-    prov._rack = {"base-db": eng}
-    prov._touch_facts(merged)
-    after = eng._db.execute("SELECT hits FROM facts").fetchone()[0]
-    assert after >= 1, "a hit carrying the fact id must increment heat"
+    prov.initialize(session_id="H2", hermes_home=str(tmp_path))
+    prov._rack = {"vec": vb}
+    before = led._db.execute("SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
+    led._db.commit()   # a held read txn keeps the shared lock — release before the cross-connection touch
+    prov._touch_facts(hits)
+    after = led._db.execute("SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
+    fresh = sqlite3.connect(str(tmp_path / "plugin-data" / "memrack" / "memrack.db"))
+    try:
+        after = fresh.execute(
+            "SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
+    finally:
+        fresh.close()
+    assert after >= before + 1, "a hit carrying the fact rowid must bump ledger heat"
 
 
 def test_vec_backfill_batch_and_backlog_field(tmp_path, monkeypatch):
-    eng = _vec_engine(tmp_path, monkeypatch, batch="1")
+    led, vb = _vec_on(tmp_path, monkeypatch, batch="1")
     for text in ("first backlog fact alpha", "second backlog fact beta",
                  "third backlog fact gamma"):
-        eng.write("explicit", text)
-    hits = eng.search("first backlog fact", "vec", 8)
+        led.write("explicit", text)
+    hits = vb.search("first backlog fact", "vec", 8)
     assert hits and hits[0]["_vec_backlog"] == 2, "remaining un-embedded rows must be visible"
-    assert eng._db.execute("SELECT COUNT(*) FROM facts_vec").fetchone()[0] == 1
-    hits2 = eng.search("second backlog fact", "vec", 8)
+    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 1
+    hits2 = vb.search("second backlog fact", "vec", 8)
     assert hits2[0]["_vec_backlog"] == 1
 
 
 def test_vec_dimension_probe_sizes_new_table(tmp_path, monkeypatch):
-    eng = _vec_engine(tmp_path, monkeypatch, dim=8)
-    eng.write("explicit", "dimension probe fact content")
-    hits = eng.search("dimension probe", "vec", 8)     # insert must succeed at dim 8
+    led, vb = _vec_on(tmp_path, monkeypatch, dim=8)
+    led.write("explicit", "dimension probe fact content")
+    hits = vb.search("dimension probe", "vec", 8)        # insert must succeed at dim 8
     assert hits
-    assert eng._db.execute("SELECT vec_length(embedding) FROM facts_vec LIMIT 1"
-                           ).fetchone()[0] == 8
+    assert vb._store.execute("SELECT vec_length(embedding) FROM facts_vec2 LIMIT 1"
+                             ).fetchone()[0] == 8
 
 
 def test_vec_dimension_mismatch_degrades_honestly(tmp_path, monkeypatch):
-    eng = _vec_engine(tmp_path, monkeypatch, dim=4)
-    eng.write("explicit", "first stored fact here")
-    eng.search("first stored fact", "vec", 8)          # indexed at dim 4
-    eng.shutdown()
-    eng2 = BASE_DB.BaseDbBackend()
-    monkeypatch.setattr(eng2, "_vec_probe", lambda: True)
-    monkeypatch.setattr(eng2, "_embed", lambda texts: [[0.1] * 6 for _ in texts])
-    eng2.initialize(session_id="R3V2", hermes_home=str(tmp_path))
-    assert eng2._vec_ok is False
-    assert "dimension mismatch" in eng2._vec_gap
-    assert "vec" not in eng2.card_modes()
+    led, vb = _vec_on(tmp_path, monkeypatch, dim=4)
+    led.write("explicit", "first stored fact here")
+    vb.search("first stored fact", "vec", 8)             # indexed at dim 4
+    vecspec = importlib.util.spec_from_file_location(
+        "memrack_backends_vec3", pathlib.Path(_ROOT / "backends" / "vec.py"))
+    VEC = importlib.util.module_from_spec(vecspec)
+    vecspec.loader.exec_module(VEC)
+    vb2 = VEC.VecBackend()
+    monkeypatch.setattr(vb2, "_probe", lambda: True)
+    monkeypatch.setattr(vb2, "_embed", lambda texts: [[0.1] * 6 for _ in texts])
+    vb2.initialize(session_id="R3V2", hermes_home=str(tmp_path))
+    assert vb2._vec_ok is False
+    assert "dimension mismatch" in vb2._vec_gap
+    assert vb2.card_modes() == ()
     with pytest.raises(ValueError):
-        eng2.search("anything", "vec", 8)
+        vb2.search("anything", "vec", 8)
 
 
 def test_search_surfaces_vec_backlog(tmp_path):

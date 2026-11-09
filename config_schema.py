@@ -42,7 +42,7 @@ from plugins.memory.config_schema import (
 _LOG = logging.getLogger("memrack.config_schema")
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent
-_BUILTIN_NAMES = ("base-db", "state-episodic", "wiki")
+_BUILTIN_NAMES = ("base-db", "state-episodic", "wiki", "vec")
 """Mirror of the provider core's ``_SHIPPED_BUILTINS`` (the candidate
 code-first built-ins: rack members AND parked ones; the filename stem carries
 the real backend name only in these three shipped cases, so the honest
