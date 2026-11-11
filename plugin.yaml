@@ -1,6 +1,6 @@
 name: memrack
 capabilities: [tools.override]   # mounts memrack_search/write/status/import/dock/card_review/vec_add (no overrides of builtin tools!)
-version: 0.11.0
+version: 0.11.1
 pip_dependencies:   # optional semantic-recall deps: PM installs them into Hermes' environment (the vec probe stays honest without them)
   - sqlite-vec>=0.1.9
   - pypdf>=4.0   # pdf ingest only; absent = fail loud with an install hint (no silent degradation)

@@ -26,7 +26,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.11.0"
+__version__ = "0.11.1"
 
 # The initialize side-effect block's cross-process exclusivity: one flock on
 # plugin-data/memrack/init.lock with a generous busy budget, polled in small
@@ -1049,6 +1049,9 @@ class _MemrackBase:
         self._warm_rack = dict(self._rack)
         self._applied_membership_hash = self._membership_stand_hash()
         self._membership_stat_memo = self._membership_stat_fingerprint()
+        # the cards-on-delta memo starts EMPTY: the first tool answer of this
+        # provider instance carries the full cards (the plan's first-call rule)
+        self._cards_served_stand = None
         _LOG.info("memrack ready (v%s): backends=%s active=%s gaps=%s parked=%s errors=%s",
                   __version__, sorted(self._rack),
                   self._active.name if self._active else None,
@@ -1227,6 +1230,15 @@ class _MemrackBase:
         snapshot, so a card can never go stale within a session."""
         rack = getattr(self, "_rack", None) or {}
         return {n: _card(b) for n, b in rack.items()}
+
+    def _remember_answered_stand(self):
+        """Memoize the membership stand the LAST card-carrying answer was
+        built on (ONE source: the same stand hash the live-membership law
+        uses). The next search compares against this: unchanged stand = the
+        compact marker, changed stand = the full cards again. Write and
+        vec_add answers (which keep their own unchanged form) advance the
+        memo too, so they never produce a duplicate card prose."""
+        self._cards_served_stand = self._membership_stand_hash()
 
     @staticmethod
     def _rack_status_slot(cards, ran=None, skipped=None, engine_errors=None, reason=None) -> dict:
@@ -1985,8 +1997,24 @@ class _MemrackBase:
             result["hint"] = hint
         if vec_backlog:   # honest incompleteness note: newer facts may sit un-embedded
             result["vec_backlog"] = vec_backlog
-        if cards:   # additive in-flow slot: the rack cards, rebuilt fresh
-            result["cards"] = cards
+        # the cards-on-delta law: the card prose leaves the provider ONLY on a
+        # membership delta (the first tool answer of this instance counts as
+        # one — the memo starts empty) or on the first answer itself; an
+        # unchanged stand answers with the compact marker (the rack_status
+        # slot above stays on EVERY answer, unchanged).
+        stand_now = self._membership_stand_hash()
+        if getattr(self, "_cards_served_stand", None) != stand_now:
+            if cards:   # additive in-flow slot: the rack cards, rebuilt fresh
+                result["cards"] = cards
+            self._remember_answered_stand()
+        else:
+            result["cards"] = {
+                "cards_unchanged": True,
+                "hint": "memrack_status for the card prose",
+                "write_targets": {
+                    n: bool(callable(getattr(b, "write", None)))
+                    for n, b in sorted(self._rack.items())},
+            }
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     @staticmethod
@@ -2076,7 +2104,9 @@ class _MemrackBase:
             return {"error": "exactly ONE of text/path is required",
                     "hint": "pass the document as text or as a file path"}
         try:
-            return engine.add_source(**payload)
+            out = engine.add_source(**payload)
+            self._remember_answered_stand()   # memo hygiene: the next search stays consistent
+            return out
         except Exception as exc:
             return {"error": "vec ingest failed: %s: %s" % (type(exc).__name__, exc),
                     "source_ref": payload.get("source_ref")}
@@ -2185,6 +2215,7 @@ class _MemrackBase:
         cards = self._cards_now()   # additive in-flow slot: the rack cards, rebuilt fresh
         if cards:
             result["cards"] = cards
+        self._remember_answered_stand()   # the write's own prose counts — the next search is consistent
         return json.dumps(result, indent=2, ensure_ascii=False)
 
     def _rescan_dock(self) -> list:

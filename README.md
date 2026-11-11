@@ -45,7 +45,7 @@ have.
 | state-episodic | episodic | read-only search over the host session history |
 | **vec** (opt-in) | vec (+ `memrack_vec_add` ingest) | AUTONOMOUS DOCUMENT STORE — ingest .md/.txt/pdf into chunks (mechanical, batched embedded) and recall them semantically; own store (`plugin-data/memrack/vec-index.db`: vecchunks + chunk_heat); the corpus holds ONLY what was ingested (the ledger harvest is ended); pdf needs the optional pypdf dep; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off |
 
-## Status — v0.11.0 (353 tests green)
+## Status — v0.11.1 (362 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -59,9 +59,14 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 - [x] Rack cards (`best_for`/`limits`/`search` — manifest data for docked, attrs for built-ins)
 - [x] `memrack_write` / `memrack_search` / `memrack_status` — agent routing,
       fan-out with RRF merge, target collapse, guided empty-hints, honest mode-errors
-- [x] in-flow cards: every `memrack_search` / `memrack_write` / `memrack_status`
-      answer carries the rack cards as an additive `cards` slot — rebuilt per
-      call from the live rack, never a stale init snapshot
+- [x] in-flow cards: `memrack_search` carries the rack cards as an additive
+      `cards` slot ON A MEMBERSHIP DELTA — the first tool answer of a provider
+      instance and every answer after a membership stand change carry the full
+      prose (rebuilt per call from the live rack, never a stale init snapshot);
+      an unchanged stand answers with the compact marker (`cards_unchanged`,
+      the `memrack_status` hint and the per-backend `write_targets` booleans).
+      `memrack_write` keeps its full-cards answer; `memrack_status` remains
+      the full inspection surface
 - [x] rack-status slot: every `memrack_search` answer additionally carries a LEAN
       additive `rack_status` map — per active backend its live `modes` (the same
       one copy the cards are built from) plus `participation` for THIS query
@@ -290,11 +295,12 @@ suppressed for the automatic contexts (`agent_context` cron/subagent, per
 the ABC's initialize contract) with an honest route-log note; explicit
 `memrack_write` tool calls stay the agent's decision whatever the context.
 
-## A search answer (the rack-status slot)
+## A search answer (the rack-status slot, cards on delta)
 
 `memrack_search` merges the fan-out (RRF) and answers with results, engine
-errors, the cards AND the lean rack-status slot — per active backend its live
-modes and this query's participation (sorted deterministic order, no card prose):
+errors, the cards (on a membership delta) AND the lean rack-status slot — per
+active backend its live modes and this query's participation (sorted
+deterministic order, no card prose):
 
 ```json
 {
@@ -305,13 +311,23 @@ modes and this query's participation (sorted deterministic order, no card prose)
     "state-episodic": {"modes": ["episodic"],        "participation": "searched"},
     "wiki":          {"modes": [],                  "participation": "skipped",
                       "reason": "mode 'fts' not carried"}
+  },
+  "cards": {
+    "cards_unchanged": true,
+    "hint": "memrack_status for the card prose",
+    "write_targets": {"base-db": true, "state-episodic": false, "wiki": true}
   }
 }
 ```
 
 A backend that could not run marks itself honestly (`skipped` with a short
 reason, or `gap` = its entry sits in `engine_errors`); the zero-hit and the
-error answers carry the same slot.
+error answers carry the same slot. **Cards on delta, status always:** the
+FULL card prose rides only on the first tool answer of a provider instance
+and after a membership stand change; an unchanged stand answers with the
+compact marker above (the `memrack_status` hint plus the per-backend
+`write_targets` booleans — the write vocabulary stays known without prose).
+`rack_status` stays on EVERY answer.
 
 ## Design principles
 

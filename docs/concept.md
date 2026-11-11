@@ -26,10 +26,14 @@ write time** (deterministic source rules only as fallback — no LLM judge at wr
 and to **prioritize backends at read time** — not to call a unified API and hide
 the differences.
 
-The tools keep the cards in-flow: `memrack_search`, `memrack_write` and
-`memrack_status` each carry the rack cards as an additive `cards` slot in their
-answer, rebuilt per call from the live rack — so the agent re-checks the rack at
-every tool transition without a separate status round-trip.
+The tools keep the cards in-flow: `memrack_write` and `memrack_status` each
+carry the rack cards as an additive `cards` slot in their answer, rebuilt per
+call from the live rack — and `memrack_search` carries them on a membership
+delta (the first tool answer of a provider instance and every answer after a
+membership stand change carry the full prose; an unchanged stand answers with
+the compact `cards_unchanged` marker pointing at `memrack_status`) — so the
+agent re-checks the rack at every tool transition without a separate status
+round-trip, without paying the card prose twice for the same stand.
 
 Docked cards have a second lifecycle state: a draft card written by the
 docking machine's probe carries **PROPOSED** `best_for`/`limits` (plain

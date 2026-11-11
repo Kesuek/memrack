@@ -123,6 +123,30 @@ carries card prose (`best_for`/`limits` stay in `cards` — the token law: the
 slot costs a flat handful of tokens per active backend). The slot rides every
 answer path, including zero-hit and honest-error searches.
 
+### Cards on delta, status always
+
+The FULL card prose leaves the provider only on a membership delta: the first
+tool answer of a provider instance carries the full `cards` map, and every
+answer after a membership stand change does too (the same stand hash the
+live-membership law uses — one source, no second truth). An unchanged stand
+answers with the compact marker, so repeated searches stop paying the prose
+twice:
+
+```json
+"cards": {
+  "cards_unchanged": true,
+  "hint": "memrack_status for the card prose",
+  "write_targets": {"base-db": true}
+}
+```
+
+`write_targets` = one line per active backend, `true` when it carries an
+atomic write (the write vocabulary never goes unknown). Write and vec_add
+calls keep their own answer form and advance the delta memo — the next search
+stays consistent. The full prose is always available on demand:
+`memrack_status` remains the complete inspection surface (cards, gaps, parked
+docks, switch receipts).
+
 ### The CLI pipeline and the fresh init report the same card
 
 `hermes memrack status` (the inventory pipeline) and a fresh `initialize()`
