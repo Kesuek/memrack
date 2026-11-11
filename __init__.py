@@ -26,7 +26,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 # The initialize side-effect block's cross-process exclusivity: one flock on
 # plugin-data/memrack/init.lock with a generous busy budget, polled in small
@@ -304,6 +304,14 @@ def _card(backend) -> dict:
         "origin": (man.get("module") or "code") if man else "code",
         "declared": sorted(set(declared) - set(modes)),   # manifest promise WITHOUT delivery (env)
     }
+    if not out["modes"]:
+        # The card reports what IS: a mode-bearing backend whose live probe came up
+        # empty carries the probe's honest reason (one copy with the fresh-init cards —
+        # the CLI inventory pipeline shows the same reason, never a silent empty modes).
+        promised = declared or tuple(getattr(backend, "search_modes", ()))
+        gap = getattr(backend, "_vec_gap", None)
+        if promised and isinstance(gap, str) and gap:
+            out["env_gap"] = gap
     if man:   # catalog-dock additions (sparse, additive only): the mirrored
         # effective tool names (the Namensgesetz duty — they always sit on the
         # status card) and the draft marker until the human review ran.
@@ -1049,6 +1057,36 @@ class _MemrackBase:
         rack = getattr(self, "_rack", None) or {}
         return {n: _card(b) for n, b in rack.items()}
 
+    @staticmethod
+    def _rack_status_slot(cards, ran=None, skipped=None, engine_errors=None, reason=None) -> dict:
+        """The lean rack-status slot: per ACTIVE backend its live modes (the SAME
+        source as the cards — one copy, no second truth) plus `participation`
+        for THIS query: searched | skipped (mode not carried, short reason) |
+        gap (an engine_errors entry). Deterministic order (sorted names), NO
+        card texts (the token law). Status = the state question, request routing
+        stays the query's own business: the slot always shows the WHOLE rack."""
+        ran = ran or {}
+        skipped = skipped if isinstance(skipped, dict) else {}
+        reason = reason if isinstance(reason, str) else (None if reason is None else str(reason))
+        err_names = {e.get("backend") for e in (engine_errors or [])}
+        out: dict = {}
+        for name in sorted(cards):
+            entry = {"modes": list(cards[name].get("modes") or ())}
+            if name in err_names:
+                entry["participation"] = "gap"
+            elif ran.get(name):
+                entry["participation"] = "searched"
+            else:
+                entry["participation"] = "skipped"
+                if isinstance(skipped, str):   # a whole-slot rejection reason
+                    reason = skipped
+                if reason:
+                    entry["reason"] = reason
+                elif name in skipped:
+                    entry["reason"] = skipped[name]
+            out[name] = entry
+        return out
+
     def _gap_once(self, backend, error):
         """Append a gap entry ONCE (assembly paths may run per call; duplicate
         honest notes are noise, not signal). Entry shape = the init-gap shape."""
@@ -1664,29 +1702,40 @@ class _MemrackBase:
             limit = int(args.get("limit") or self._config.get("search_top_k") or 8)
         except (ValueError, TypeError):
             return json.dumps({"error": "limit must be an integer (1-32)",
-                               "hint": "omitting it uses search_top_k from the config"}, ensure_ascii=False)
+                               "hint": "omitting it uses search_top_k from the config",
+                               "rack_status": self._rack_status_slot(
+                                   self._cards_now(), skipped="rejected: limit must be an integer (1-32)")},
+                              ensure_ascii=False)
         limit = max(1, min(limit, 32))
+        cards = self._cards_now()   # rebuilt on call — routing and answer share one source
         if not query:
             return json.dumps({"error": "query required",
-                               "hint": "What are you looking for? One keyword is enough, e.g. 'Relay Port'"},
+                               "hint": "What are you looking for? One keyword is enough, e.g. 'Relay Port'",
+                               "rack_status": self._rack_status_slot(cards, skipped="rejected: query required")},
                               ensure_ascii=False)
 
         chosen = list(self._rack.values())
-        cards = self._cards_now()   # rebuilt on call — routing and answer share one source
         if backend_wish:
             if backend_wish not in self._rack:
                 return json.dumps({
                     "error": "unknown backend %r" % backend_wish,
                     "hint": "registered: %s" % ", ".join(sorted(self._rack)),
+                    "rack_status": self._rack_status_slot(
+                        cards, skipped="not requested (backend %r unknown)" % backend_wish),
                 }, ensure_ascii=False)
             chosen = [self._rack[backend_wish]]
 
         requested = list(_SEARCH_MODES) if mode == "all" else [mode]
         if mode != "all" and mode not in _SEARCH_MODES:
             return json.dumps({"error": "unknown mode %r" % mode,
-                               "hint": "modes: all|fts|vec|pointers"}, ensure_ascii=False)
+                               "hint": "modes: all|fts|vec|pointers",
+                               "rack_status": self._rack_status_slot(
+                                   cards, skipped="rejected: unknown mode %r" % mode)},
+                              ensure_ascii=False)
 
         runs, engine_errors, vec_backlog = [], [], 0
+        ran: dict = {}           # backend -> modes whose fan-out ran (hit or zero)
+        skipped: dict = {}       # backend -> short reason (mode not carried)
         carried = sorted({m for b in chosen for m in cards[b.name]["modes"]})
         if mode != "all" and mode not in carried:
             # the degradation law Degradation: a specifically requested mode that NO backend
@@ -1694,6 +1743,8 @@ class _MemrackBase:
             return json.dumps({
                 "error": "no backend carries mode %r" % mode,
                 "hint": "available modes: %s" % (", ".join(carried) or "none"),
+                "rack_status": self._rack_status_slot(
+                    cards, skipped="requested mode %r not carried" % mode),
             }, ensure_ascii=False)
         for backend in chosen:
             modes = [m for m in requested if m in tuple(cards[backend.name]["modes"])]
@@ -1703,7 +1754,11 @@ class _MemrackBase:
                         "error": "backend %r does not carry mode %r" % (backend.name, mode),
                         "hint": "available modes: %s" % ", ".join(
                             cards[backend.name]["modes"] or ["none"]),
+                        "rack_status": self._rack_status_slot(
+                            cards, ran, {backend.name: "requested mode %r not carried" % mode}),
                     }, ensure_ascii=False)
+                skipped[backend.name] = ("mode %r not carried" % mode if mode != "all"
+                                         else "no live search modes")
                 continue
             for m in modes:
                 try:
@@ -1714,6 +1769,7 @@ class _MemrackBase:
                     backlog = max((int(h.pop("_vec_backlog", 0) or 0) for h in hits), default=0)
                     vec_backlog = max(vec_backlog, backlog)
                     runs.append(hits)
+                    ran.setdefault(backend.name, []).append(m)
                 except Exception as exc:
                     engine_errors.append({"backend": backend.name, "mode": m,
                                           "error": "%s: %s" % (type(exc).__name__, exc)})
@@ -1722,7 +1778,10 @@ class _MemrackBase:
         ms = int((time.time() - started) * 1000)
         self._touch_facts(merged)
         result = {"query": query, "mode": mode, "backend": backend_wish,
-                  "ms": ms, "results": merged, "engine_errors": engine_errors}
+                  "ms": ms, "results": merged, "engine_errors": engine_errors,
+                  "rack_status": self._rack_status_slot(
+                      cards, ran, skipped, engine_errors,
+                      reason=("only %r was targeted" % backend_wish) if backend_wish else None)}
         if not merged and not engine_errors:
             hint = "0 results."
             if backend_wish:

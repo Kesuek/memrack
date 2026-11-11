@@ -45,7 +45,7 @@ have.
 | state-episodic | episodic | read-only search over the host session history |
 | **vec** (opt-in) | vec | semantic recall over the fact ledger — sqlite-vec + a local OpenAI-compatible embedder; own store (`plugin-data/memrack/vec-index.db`), ledger attached read-only; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off; one-time legacy-embedding import on first enable |
 
-## Status — v0.9.0 (318 tests green)
+## Status — v0.10.0 (327 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -62,6 +62,11 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 - [x] in-flow cards: every `memrack_search` / `memrack_write` / `memrack_status`
       answer carries the rack cards as an additive `cards` slot — rebuilt per
       call from the live rack, never a stale init snapshot
+- [x] rack-status slot: every `memrack_search` answer additionally carries a LEAN
+      additive `rack_status` map — per active backend its live `modes` (the same
+      one copy the cards are built from) plus `participation` for THIS query
+      (`searched` | `skipped` | `gap`), sorted deterministically, no card texts
+      (the token law: the card prose stays in `cards`)
 - [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked) —
       now with a page search engine (`WikiIndex`, stdlib-only: stat-first
       mtime/size pass — unchanged pages are never read —, L<n>-targets, snippets)
@@ -264,6 +269,29 @@ Memory-MIRROR writes (the host memory tool's mirror into the rack) are
 suppressed for the automatic contexts (`agent_context` cron/subagent, per
 the ABC's initialize contract) with an honest route-log note; explicit
 `memrack_write` tool calls stay the agent's decision whatever the context.
+
+## A search answer (the rack-status slot)
+
+`memrack_search` merges the fan-out (RRF) and answers with results, engine
+errors, the cards AND the lean rack-status slot — per active backend its live
+modes and this query's participation (sorted deterministic order, no card prose):
+
+```json
+{
+  "results": [{"backend": "base-db", "kind": "fact", "content": "…", "rank": 1}],
+  "engine_errors": [],
+  "rack_status": {
+    "base-db":       {"modes": ["fts", "pointers"],  "participation": "searched"},
+    "state-episodic": {"modes": ["episodic"],        "participation": "searched"},
+    "wiki":          {"modes": [],                  "participation": "skipped",
+                      "reason": "mode 'fts' not carried"}
+  }
+}
+```
+
+A backend that could not run marks itself honestly (`skipped` with a short
+reason, or `gap` = its entry sits in `engine_errors`); the zero-hit and the
+error answers carry the same slot.
 
 ## Design principles
 

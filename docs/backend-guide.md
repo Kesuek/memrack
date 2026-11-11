@@ -94,6 +94,41 @@ carries it additively (an absent receipt stays absent). A failed store
 write is fail-closed: the files still carry the choice, so it persists for
 an honest retry and the receipt names the write error.
 
+### The rack_status slot (every search answers the rack)
+
+Every `memrack_search` answer besides the cards carries a LEAN additive
+`rack_status` map — per ACTIVE backend its live `modes` (read from the SAME
+one-card source the search routes with: one copy, no second truth) plus
+`participation` for THIS query:
+
+```json
+"rack_status": {
+  "base-db": {"modes": ["fts", "pointers"], "participation": "searched"},
+  "vec":     {"modes": ["vec"],             "participation": "skipped",
+              "reason": "mode 'fts' not carried"},
+  "wiki":    {"modes": ["fts"],             "participation": "gap"}
+}
+```
+
+`searched` = the backend's fan-out ran; `skipped` carries a short `reason`
+(mode not carried, none live, or the request rejected before fan-out) and
+`gap` maps to that backend's `engine_errors` entries. Keys are sorted
+(deterministic), the slot shows the WHOLE rack even on a targeted search
+(status = the state question, routing = the query's business), and it never
+carries card prose (`best_for`/`limits` stay in `cards` — the token law: the
+slot costs a flat handful of tokens per active backend). The slot rides every
+answer path, including zero-hit and honest-error searches.
+
+### The CLI pipeline and the fresh init report the same card
+
+`hermes memrack status` (the inventory pipeline) and a fresh `initialize()`
+on the SAME home build their cards from the same on-call card reconstruction —
+pinned by test (the suite runs both and compares). A backend whose environment
+probe fails degrades identically in both: its card ships empty `modes` WITH the
+honest `env_gap` reason (never a silent promise in one pipeline and silence in
+the other), and the optional semantic backend's package requirement is declared
+in the manifest (`pip_dependencies`) so the environment provisioning carries it.
+
 ### The dock-name law (every name-built path, one validator)
 
 Card/provider names are lowercase dashes, underscores and digits —
@@ -308,7 +343,8 @@ no embedding calls, no cold start. Semantic recall lives in the built-in
   heat counter (`touch`), which is metadata, not fact content.
 - availability: embedder probe at init (ollama tags + model presence); without
   a live embedder the card degrades honestly (no vec promise) and the rack
-  keeps answering fts/pointers/episodic.
+  keeps answering fts/pointers/episodic — the probe's reason rides the card
+  additively as `env_gap` (fresh-init cards AND the served status, one copy).
 - harvest: incremental, batched (`vec_backfill_batch`); backlog surfaces
   honestly on every hit (`_vec_backlog`); removed fact ids are tombstoned out
   of the index on the next pass.
