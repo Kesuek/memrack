@@ -560,6 +560,17 @@ class _MemrackBase:
         self._dock_want_outcome = None
         self._uninstalled_report = None
         self._lock = threading.Lock()
+        # live membership (the runtime-switch law): every warm-initialized
+        # instance this session has EVER held, kept so a park only leaves the
+        # ACTIVE rack (restore = the cached instance back, never a re-probe)
+        self._warm_rack: dict = {}
+        # the membership memo: a hash of the last stand actually applied to
+        # the rack + a cheap stat fingerprint of the stores (unchanged = the
+        # per-call re-evaluation costs two stats and a directory listing)
+        self._applied_membership_hash = None
+        self._membership_stat_memo = None
+        # the initialize kwargs the lazy (re)initialization of a member needs
+        self._init_kwargs: dict = {}
 
     # ── lifecycle ──
     def _profile_config(self, hermes_home) -> dict:
@@ -861,6 +872,10 @@ class _MemrackBase:
         # memory-MIRROR write path only (cron/subagent runs stay writers-free;
         # tool writes are decisions and stay unaffected).
         self._agent_context = kwargs.get("agent_context")
+        # the kwargs the lazy member (re)initialization needs (the LIVE
+        # membership rebuild mirrors the init fan-out exactly on a
+        # never-initialized member)
+        self._init_kwargs = dict(kwargs)
         self._config.update(self._profile_config(self._hermes_home))   # the file wins the live keys
 
         # a re-initialize starts CLEAN: no stale gaps from a previous session, no stale force
@@ -988,15 +1003,7 @@ class _MemrackBase:
                                  % (type(exc).__name__, exc)}
                     _LOG.warning("memrack dock_want hook failed: %s", exc)
 
-        enabled = _norm_backends(self._config.get("enabled_backends"))
-        if not enabled:
-            enabled = list(_DEFAULT_ENABLED)
-        if DEFAULT_BACKEND not in enabled:   # the floor mounts with >=1 non-base entry already
-            enabled = [DEFAULT_BACKEND] + enabled
-        if _truthy(self._config.get("auto_enable")):   # activation auto-provision —
-            for b in ("base-db", "wiki"):              # merge only, never a disable
-                if b not in enabled:
-                    enabled.append(b)
+        enabled = self._enabled_builtins_from_config()
         rack = discover_backends(self._hermes_home, enabled_builtins=enabled)
         self._rack = rack["backends"]
         self._parked = rack["parked"]
@@ -1036,11 +1043,33 @@ class _MemrackBase:
         forced = self._config.get("backend")
         if forced and forced in self._rack:
             self._force = True
+        # the live membership memo starts AT the init stand (the per-call
+        # re-evaluation compares against this, and the warm cache starts
+        # full: a mid-session park keeps its initialized instance around)
+        self._warm_rack = dict(self._rack)
+        self._applied_membership_hash = self._membership_stand_hash()
+        self._membership_stat_memo = self._membership_stat_fingerprint()
         _LOG.info("memrack ready (v%s): backends=%s active=%s gaps=%s parked=%s errors=%s",
                   __version__, sorted(self._rack),
                   self._active.name if self._active else None,
                   self._gaps or "none", self._parked or "none",
                   self._load_errors or "none")
+
+    def _enabled_builtins_from_config(self):
+        """The enabled built-ins stand, ONE copy (the init fan-out and the
+        live membership rebuild share it): the normalized list or the
+        defaults, the floor always mounted, the activation auto-provision
+        merged (never a disable)."""
+        enabled = _norm_backends(self._config.get("enabled_backends"))
+        if not enabled:
+            enabled = list(_DEFAULT_ENABLED)
+        if DEFAULT_BACKEND not in enabled:   # the floor mounts with >=1 non-base entry already
+            enabled = [DEFAULT_BACKEND] + enabled
+        if _truthy(self._config.get("auto_enable")):   # activation auto-provision —
+            for b in ("base-db", "wiki"):              # merge only, never a disable
+                if b not in enabled:
+                    enabled.append(b)
+        return enabled
 
     def _pick_default_target(self):
         forced = self._config.get("backend")
@@ -1049,6 +1078,148 @@ class _MemrackBase:
             # Basisfall rule: single-backend rack → go there, whatever its name
             target = next(iter(self._rack))
         return target
+
+    def _membership_stat_fingerprint(self):
+        """The cheap per-call fingerprint over the membership stands: the
+        stat identity of BOTH config stores plus the docked-card presence
+        family. Unchanged fingerprint = the re-evaluation costs the stats
+        only (no store read, no fold, no rebuild)."""
+        home = Path(self._hermes_home)
+        parts = []
+        for path in (home / "config.yaml",
+                     home / PLUGIN_NAME / "config.json"):
+            try:
+                st = path.stat()
+                parts.append([str(path), st.st_mtime_ns, st.st_size])
+            except OSError:
+                parts.append([str(path), None, None])
+        parts.append(sorted(self._docked_card_names(home)))
+        return json.dumps(parts, sort_keys=True)
+
+    def _membership_stand_hash(self):
+        """The SEMANTIC membership stand: the persisted toggle keys + the
+        enabled string over both stores, plus the docked-card presence
+        family (a dock card's membership IS its presence). The applied memo
+        is a hash of exactly this — a store write that does not change the
+        stand never triggers a fold."""
+        cfg = self._profile_config(self._hermes_home) or {}
+        toggles = sorted(
+            (k, _truthy(v)) for k, v in cfg.items()
+            if isinstance(k, str) and k.endswith("_in_rack"))
+        payload = {
+            "toggles": toggles,
+            "enabled": _norm_backends(cfg.get("enabled_backends")),
+            "docked": sorted(self._docked_card_names(self._hermes_home)),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True)
+                              .encode("utf-8")).hexdigest()
+
+    def _rebuild_rack_membership(self):
+        """Rebuild the ACTIVE rack from the current stand, reusing warm
+        already-initialized instances: an instance the rack has held before
+        comes back by cache (park = out of the active rack, instance stays
+        warm; restore = the cached instance back — no re-probe), a NEVER
+        initialized backend initializes lazily here (its honest probe/gap,
+        exactly like an initialize member). Cards, active target and the
+        park/error surfaces follow the NEW stand; the rack_status slot
+        reflects the new participation automatically (it reads the
+        live cards). A rebuild NEVER touches the config stores."""
+        enabled = self._enabled_builtins_from_config()
+        discovered = discover_backends(self._hermes_home,
+                                       enabled_builtins=enabled)
+        desired = discovered["backends"]
+        new_rack: dict = {}
+        warm_reused, lazy_inited = [], []
+        for name, backend in sorted(desired.items()):
+            warm = self._warm_rack.get(name)
+            if warm is not None:
+                new_rack[name] = warm          # restore: the cached instance
+                warm_reused.append(name)
+                continue
+            try:                               # never-initialized: lazy init
+                backend.initialize(
+                    session_id=self._session_id,
+                    hermes_home=self._hermes_home,
+                    provider_config=self._config, **self._init_kwargs)
+                new_rack[name] = backend
+                self._warm_rack[name] = backend
+                lazy_inited.append(name)
+            except Exception as exc:
+                self._gap_once(name, "%s: %s" % (type(exc).__name__, exc))
+                _LOG.warning("memrack live membership: %r failed to "
+                             "initialize lazily (%s: %s)", name,
+                             type(exc).__name__, exc)
+        joined = sorted(set(new_rack) - set(self._rack))
+        left = sorted(set(self._rack) - set(new_rack))
+        self._rack = new_rack
+        self._parked = discovered["parked"]
+        self._load_errors = discovered["errors"]
+        target = self._pick_default_target()
+        self._active = self._rack.get(target) or \
+            self._rack.get(DEFAULT_BACKEND)
+        forced = self._config.get("backend")
+        self._force = bool(forced and forced in self._rack)
+        self._cards = self._cards_now()
+        if joined or left:
+            _LOG.info("memrack live membership: joined=%s left=%s "
+                      "warm_reused=%s lazy_inited=%s",
+                      joined, left, warm_reused, lazy_inited)
+            self._log_route(
+                "membership_rebuild",
+                "joined=%s left=%s warm_reused=%s lazy_inited=%s"
+                % (",".join(joined), ",".join(left),
+                   ",".join(warm_reused), ",".join(lazy_inited)), "—")
+        return joined, left
+
+    def _ensure_live_membership(self):
+        """Per-call membership re-evaluation (the runtime-switch law): ONE
+        cheap stat fingerprint per call; a CHANGED stand runs the SAME
+        flock-protected fold an initialize runs and rebuilds the rack off
+        warm instances (see _rebuild_rack_membership). Unchanged stand =
+        zero work. The hook serves the FOUR tool paths (search/status/
+        write/vec_add) — the injected context channel (prefetch/system
+        block) keeps its session stand (the channel split law). Read paths
+        here never write the config stores; a flock-BUSY home is an honest
+        skip note whose stand is applied at the next call (the memo does
+        not advance)."""
+        if self._applied_membership_hash is None:
+            return          # pre-init or a fold-less init: the hook is inert
+        try:
+            fingerprint = self._membership_stat_fingerprint()
+        except Exception as exc:
+            _LOG.warning("memrack membership fingerprint unreadable (%s: %s)",
+                         type(exc).__name__, exc)
+            return
+        if fingerprint == self._membership_stat_memo:
+            return          # unchanged: zero work beyond the fingerprint
+        with self._side_effect_lock() as exclusive:
+            if not exclusive:
+                # a serialized runner holds the stores — honest skip, the
+                # memo stays put, the next call retries the stand
+                _LOG.info("memrack membership fold skipped: the home's "
+                          "side-effect lock is busy (stand re-applies at "
+                          "the next tool call)")
+                self._log_route("membership_rebuild",
+                                "lock busy — fold skipped this call", "—")
+                return
+            fingerprint = self._membership_stat_fingerprint()
+            if fingerprint == self._membership_stat_memo:
+                return      # a serialized runner already applied this stand
+            stand = self._membership_stand_hash()
+            if stand == self._applied_membership_hash:
+                # the stores moved (an unrelated key) but the MEMBERSHIP
+                # stand did not: memoize the new fingerprint, fold nothing
+                self._membership_stat_memo = fingerprint
+                return
+            self._config.update(self._profile_config(self._hermes_home))
+            self._fold_persisted_membership_toggles()
+            self._rebuild_rack_membership()
+            self._applied_membership_hash = self._membership_stand_hash()
+            self._membership_stat_memo = self._membership_stat_fingerprint()
+
+    # the four tool paths the runtime-switch law serves
+    _LIVE_MEMBERSHIP_TOOLS = ("memrack_search", "memrack_write",
+                              "memrack_vec_add", "memrack_status")
 
     def _cards_now(self) -> dict:
         """Rack cards rebuilt ON CALL from the live rack (the same logic the
@@ -1572,6 +1743,10 @@ class _MemrackBase:
 
     def handle_tool_call(self, tool_name, args, **kwargs):
         args = dict(args or {})
+        if tool_name in self._LIVE_MEMBERSHIP_TOOLS:
+            # the runtime-switch law: these four paths see the rack live
+            # (the injected context channel follows the session instead)
+            self._ensure_live_membership()
         if tool_name == "memrack_search":
             return self._tool_search(args)
         if tool_name == "memrack_write":

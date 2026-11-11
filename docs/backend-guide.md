@@ -72,12 +72,16 @@ The fold (persisted membership toggles), the uninstall grace and the
 dock_want consumption all park/restore card files and rewrite BOTH config
 stores — parallel runs on one home (cron, gateway, a second chat, the CLI)
 serialize behind one `fcntl.flock` on `plugin-data/memrack/init.lock`
-(generous 10 s budget, small retry polls; read paths stay unlocked). A
+(generous 10 s budget, small retry polls; plain member reads stay
+unlocked). A
 home still busy after the budget skips its side effects for THAT
 initialize with an honest note (every effect is idempotent and re-runs at
 the next one); a concurrent initialize can never consume the same
 `dock_want` twice — the one-shot receipt in the store stand is the
-serialized runner's proof that the work is done.
+serialized runner's proof that the work is done. The per-call membership
+re-evaluation (the runtime-switch law) runs the fold under this same
+lock from the four tool paths; a busy lock is an honest skip note and
+the stand applies unchanged at the next tool call.
 
 ### The dock_want select is consumed (one-shot receipt)
 
@@ -218,9 +222,20 @@ the setup wizard keeps its select), so a combined-stand string can no
 longer contradict the toggles' individual state. The web server caches
 that schema per process: a dock written AFTER the backend started shows
 up in the pane only after a backend restart. The membership itself never
-waits for one — a pane toggle acts at the next `initialize()` (the
-persisted key parks/restores the card file or folds into
-`enabled_backends`), only the surface lags.
+waits for one and needs no `/new`: a pane toggle is effective on the NEXT
+SEARCH — the four tool paths (`memrack_search`/`memrack_status`/
+`memrack_write`/`memrack_vec_add`) re-evaluate the persisted membership
+stand per call (one cheap store fingerprint; a changed stand runs the
+SAME flock-protected fold an initialize runs and rebuilds the rack,
+reusing warm already-initialized backend instances — park = out of the
+active rack with the instance kept warm, restore = the cached instance
+back, a never-initialized backend initializes lazily with its honest
+probe). The persisted key parks/restores the card file or folds into
+`enabled_backends` exactly as before. THE CHANNEL SPLIT, honestly:
+searches see the rack live; the injected context (prefetch and system
+block, the session-context pipeline) FOLLOWS THE SESSION — it does not
+re-evaluate per call. Only the pane's schema surface lags, never the
+rack.
 
 ### The card-recorded query bridge (fan-out rail)
 

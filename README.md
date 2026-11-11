@@ -45,7 +45,7 @@ have.
 | state-episodic | episodic | read-only search over the host session history |
 | **vec** (opt-in) | vec (+ `memrack_vec_add` ingest) | AUTONOMOUS DOCUMENT STORE — ingest .md/.txt/pdf into chunks (mechanical, batched embedded) and recall them semantically; own store (`plugin-data/memrack/vec-index.db`: vecchunks + chunk_heat); the corpus holds ONLY what was ingested (the ledger harvest is ended); pdf needs the optional pypdf dep; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off |
 
-## Status — v0.11.0 (344 tests green)
+## Status — v0.11.0 (353 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -127,6 +127,16 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       probe flow at the next initialize (no auto-dock, the user decides)
       and is CONSUMED after it — success or controlled refusal clears the
       select from both stores; the receipt stays visible as `dock_want_last`
+- [x] live membership (runtime switching): the four tool paths
+      (`memrack_search`/`memrack_status`/`memrack_write`/`memrack_vec_add`)
+      re-evaluate the persisted membership stand on EVERY call — a changed
+      stand runs the flock-protected fold and rebuilds the rack off warm
+      already-initialized instances (park = out of the active rack with the
+      instance warm, restore = the cached instance back, no re-probe; a
+      never-initialized backend initializes lazily with its honest probe),
+      unchanged = one cheap store fingerprint and zero work. Effective on
+      the NEXT SEARCH — no `/new` needed; the injected context (prefetch /
+      system block) follows the session (the honest channel split)
 - [x] pending-confirmation flow: a PROPOSED (draft) dock card carries
       `pending_confirmation: true` + a `pending_hint` on every card surface
       (status + search/write answers); the chat confirm lands via the
@@ -139,8 +149,9 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       UI (the `enabled_backends` dropdown left the pane: a combined-stand
       string could contradict the toggles' individual state; the string
       stays internal store repr the fold maintains); a pane toggle acts
-      per `/new` through the initialize fold, and the pane's schema view
-      is frozen per backend process (the staleness note below)
+      LIVE — effective on the next memrack search/status/write/vec_add
+      call (the runtime membership re-evaluation), the page's schema view
+      stays frozen per backend process (the staleness note below)
 
 ## Config surface — membership toggles + dock_want (T-036/T-037)
 
@@ -197,10 +208,17 @@ stores stay the single source of truth.
 in-process — the family (docked names, the `dock_want` offers, the toggle
 defaults) is FROZEN per backend process: a backend docked LATER appears
 in the pane only after a backend restart. The memrack membership itself
-waits for NO restart: a pane toggle acts per `/new` (the initialize fold
-— the same consumption law the `dock_want` choice follows; the persisted
-key parks/restores the docked card file or folds into `enabled_backends`),
-only the surface lags, never the rack.
+waits for NO restart and needs NO `/new`: a pane toggle is effective on the
+NEXT SEARCH — true runtime switching. The four tool paths
+(`memrack_search`/`memrack_status`/`memrack_write`/`memrack_vec_add`)
+re-evaluate the membership stand per call (a cheap store fingerprint; a
+changed stand runs the flock-protected fold and rebuilds the rack, reusing
+warm backend instances), the persisted key parks/restores the docked card
+file or folds into `enabled_backends` exactly as before. The channel split,
+honestly: searches see the rack live; the injected context (the prefetch /
+system block of the session-context pipeline) follows the session — it
+does not re-evaluate per call. Only the pane's schema surface lags, never
+the rack.
 
 ## Install (experimental, not yet published)
 
