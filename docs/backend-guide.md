@@ -331,26 +331,43 @@ file mtimes, `pointer`-kind hits. Copy it to backends.d/ + manifest to use.
 - `load_memory_provider` fresh-instantiates with skills off unless you ask.
 
 
-## The vec backend (the split)
+## The vec backend (the autonomous document store)
 
 base-db is the tabular floor: facts, pointers, FTS5 — stdlib-only, no network,
-no embedding calls, no cold start. Semantic recall lives in the built-in
-`vec` backend (opt-in over the `vec_in_rack` toggle):
+no embedding calls, no cold start. The built-in `vec` backend (opt-in over the
+`vec_in_rack` toggle) is an AUTONOMOUS DOCUMENT STORE (T-047, 2026-11-09):
 
-- own store: `plugin-data/memrack/vec-index.db` (rowid = fact id, meta carries
-  model/dimension); the fact ledger (memrack.db) is attached READ-ONLY for
-  harvest and content joins — the ledger is never mutated except the shared
-  heat counter (`touch`), which is metadata, not fact content.
+- own store: `plugin-data/memrack/vec-index.db` — `vecchunks` (id, source_ref,
+  chunk_idx, content, hash, ts UNIQUE per ref/idx) holds the document chunks,
+  `facts_vec2` carries the embeddings (rowid = chunk id), `chunk_heat` the OWN
+  per-chunk counter; idx_meta carries model/dimension/schema_version and the
+  per-source content hashes (`src_hash:<ref>`).
+- the automatic ledger harvest is ENDED: the corpus holds ONLY what was
+  ingested (the ONE remaining read-only attach is the one-time migration of
+  the legacy harvest rows into first-class chunks, source_ref
+  `ledger:facts:<id>`).
+- ingest: `memrack_vec_add` (tool) / `hermes memrack vec add --path <file>
+  [--ref <ref>] [--pages N]` — .md/.txt to text, .pdf via pypdf (OPTIONAL dep,
+  fail loud with an install hint when missing; fail loud on empty
+  extraction, this backend never runs OCR); mechanical chunking (sentence
+  boundaries when possible, otherwise a hard split; `chunk_chars` default
+  1200, `chunk_overlap` optional), batched embeds (`vec_backfill_batch` is
+  the embed batch); re-ingest of a source_ref REPLACES (idempotent refresh);
+  content-hash dedupe skips an unchanged source. No LLM calls — the
+  embeddings are the only model contact.
+- search: knn over ALL chunk embeddings, the content join comes from the OWN
+  vecchunks table (no ledger dependency); hits carry `kind=doc`, `chunk_id`,
+  `source_ref`, a reading reference `ref = vec:<source_ref>#c<chunk_idx>`,
+  ts, distance, and the per-chunk heat counter. Doc hits burn the OWN
+  counter — the ledger heat is a base-db matter only.
 - availability: embedder probe at init (ollama tags + model presence); without
   a live embedder the card degrades honestly (no vec promise) and the rack
   keeps answering fts/pointers/episodic — the probe's reason rides the card
   additively as `env_gap` (fresh-init cards AND the served status, one copy).
-- harvest: incremental, batched (`vec_backfill_batch`); backlog surfaces
-  honestly on every hit (`_vec_backlog`); removed fact ids are tombstoned out
-  of the index on the next pass.
-- search: `mode='vec'` without membership = an honest error with the available
-  modes; the cold start after a restart lives here (the model load), warm
+- limits: an INDEPENDENT corpus — only what was ingested is in; pdf needs
+  pypdf; the cold start after a restart lives here (the model load), warm
   queries measure in the hundreds of ms.
-- legacy: a `facts_vec` table left inside memrack.db from the pre-split era is
-  imported ONE TIME on first enable (read-only attach) and stays in place,
-  unused, as documented residue.
+- legacy: a `facts_vec` table left inside memrack.db from the pre-split era
+  was imported ONE TIME on first enable and — since T-047 — migrated into
+  first-class chunks; the legacy tables stay in place, unused, documented
+  residue.

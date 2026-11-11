@@ -26,7 +26,7 @@ from pathlib import Path
 _LOG = logging.getLogger("memrack")
 
 PLUGIN_NAME = "memrack"
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 # The initialize side-effect block's cross-process exclusivity: one flock on
 # plugin-data/memrack/init.lock with a generous busy budget, polled in small
@@ -1534,6 +1534,22 @@ class _MemrackBase:
                     "provider": {"type": "string"},
                 }, "required": [], "additionalProperties": False,
             },
+            "memrack_vec_add": {
+                # T-047: ingest into the vec store's OWN corpus (document chunks).
+                "type": "object", "properties": {
+                    "source_ref": {"type": "string",
+                                   "description": "stable reading reference, e.g. a "
+                                                  "wiki path or a file path"},
+                    "text": {"type": "string"},
+                    "path": {"type": "string",
+                             "description": ".md/.txt read to text, .pdf via pypdf "
+                                            "(optional dep; fail loud when missing)"},
+                    "chunk_chars": {"type": "integer", "default": 1200},
+                    "chunk_overlap": {"type": "integer", "default": 0},
+                    "pages": {"type": "integer",
+                              "description": "pdf-only: limit to the first N pages"},
+                }, "required": ["source_ref"], "additionalProperties": False,
+            },
             "memrack_card_review": {
                 "type": "object", "properties": {
                     "backend": {"type": "string",
@@ -1562,6 +1578,9 @@ class _MemrackBase:
             return self._tool_write(args)
         if tool_name == "memrack_import":
             return self._tool_import(args)
+        if tool_name == "memrack_vec_add":
+            # T-047: ingest into the vec store's OWN corpus (document chunks).
+            return json.dumps(self._tool_vec_add(args), indent=2, ensure_ascii=False)
         if tool_name == "memrack_dock":
             return json.dumps(self._tool_dock(args), indent=2, ensure_ascii=False)
         if tool_name == "memrack_card_review":
@@ -1815,6 +1834,11 @@ class _MemrackBase:
                     "backend": hit.get("backend"), "kind": hit.get("kind"), "id": hit.get("id"),
                     "content": hit.get("content"), "target": target,
                     "snippet": hit.get("snippet"),
+                    "chunk_id": hit.get("chunk_id"),
+                    "source_ref": hit.get("source_ref"),
+                    "ref": hit.get("ref"),
+                    "rank": hit.get("rank"),
+                    "distance": hit.get("distance"),
                     "ts": hit.get("ts"), "hits": hit.get("hits") or 0,
                     "score": 0.0, "found_by": []})
                 entry["score"] += 1.0 / (60.0 + max(1, int(hit.get("rank") or 99)))
@@ -1828,10 +1852,12 @@ class _MemrackBase:
         return merged
 
     def _touch_facts(self, merged):
-        """hits++ on returned fact rows, grouped per backend (Heat = report basis)."""
+        """hits++ on returned rows, grouped per backend (Heat = report basis).
+        base-db facts burn LEDGER heat; vec doc hits burn the backend's OWN
+        per-chunk counter (kind gate: fact|doc)."""
         by_backend: dict = {}
         for hit in merged:
-            if hit.get("kind") != "fact":
+            if hit.get("kind") not in ("fact", "doc"):
                 continue
             tid = hit.get("id")
             if tid is None:
@@ -1850,6 +1876,36 @@ class _MemrackBase:
 
 
     # ── legacy import job — prerequisite of the profile migration ──
+    def _tool_vec_add(self, args):
+        """T-047: ingest ONE source into the vec store's OWN corpus (documents
+        as chunks — no ledger harvest anymore). Honest error when the vec
+        backend is not in the rack; the engine's own fail-loud (pypdf missing,
+        empty extraction, embedder gap) answers with a usable hint."""
+        args = dict(args or {})
+        engine = self._rack.get("vec")
+        if engine is None or not hasattr(engine, "add_source"):
+            return {"error": "the vec backend is not in the rack (toggle "
+                             "'vec_in_rack' on in the memrack config)",
+                    "hint": "hermes memrack status shows the cards"}
+        payload = {}
+        for key in ("source_ref", "text", "path", "chunk_chars",
+                    "chunk_overlap", "pages"):
+            val = args.get(key)
+            if val not in (None, ""):
+                payload[key] = val
+        if "source_ref" not in payload:
+            return {"error": "source_ref required (a stable reading reference, "
+                             "e.g. the wiki path or file path of the document)",
+                    "hint": "text OR path carries the document itself"}
+        if ("text" in payload) == ("path" in payload):
+            return {"error": "exactly ONE of text/path is required",
+                    "hint": "pass the document as text or as a file path"}
+        try:
+            return engine.add_source(**payload)
+        except Exception as exc:
+            return {"error": "vec ingest failed: %s: %s" % (type(exc).__name__, exc),
+                    "source_ref": payload.get("source_ref")}
+
     def _tool_import(self, args):
         """Reads builtin-memory files (MEMORY.md/USER.md, §-delimited) and imports
         each entry as a fact row: hash-dedupe = idempotent (running it twice
@@ -2066,6 +2122,10 @@ _TOOL_DESCRIPTIONS = {
                       "switch_consistency names every store switch the grace law flipped off.",
     "memrack_import": "Import the builtin memory's legacy entries (MEMORY.md/USER.md, §-delimited) "
                       "as fact rows — idempotent via hash-dedupe. Migration job, once per profile.",
+    "memrack_vec_add": "Ingest ONE document into the vec store's OWN corpus (the autonomous "
+                       "document store): text or a file path (.md/.txt/.pdf), mechanically chunked, "
+                       "batched embedded, searchable in mode vec; re-ingest of a source_ref replaces "
+                       "it. The corpus holds ONLY what was ingested here — not the fact ledger.",
     "memrack_dock": "The catalog-provider docking machine: list installed, inactive catalog memory "
                     "providers that could dock into the rack, show existing dock cards (with the "
                     "mirrored effective tool names), run the isolated probe (action=probe writes "

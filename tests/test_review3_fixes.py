@@ -4,10 +4,11 @@
     prunes `facts_vec` (rowid = fact id) — works on existing stores too;
 2.  remove respects `previous_content`, exact match first, substring fallback
     with an honest removed-report; replace/patch respect previous_content;
-3.  vec hits carry the fact id (semantic hits burn heat), the engine derives
-    its embedding dimension from a model probe (honest degrade on mismatch),
-    and the backfill batch is configurable (`vec_backfill_batch`) with a
-    visible backlog count instead of silent incompleteness;
+3.  vec hits carry the chunk id (doc hits burn the vec backend's OWN per-chunk
+    heat — the ledger heat is a base-db matter only, the harvest is ENDED),
+    the engine derives its embedding dimension from a model probe (honest
+    degrade on mismatch), and the ingest embed-batch is configurable
+    (`vec_backfill_batch` = the embed batch per add_source call);
 4.  `memrack_import` splits §-sections CRLF-safe and degrades (log + proceed)
     when a forced foreign backend ignores `target_hint`;
 5.  the base-db floor mounts with >=1 non-base entry (not >=2);
@@ -52,11 +53,10 @@ def _engine(tmp_path):
     return prov._active
 
 
-def _vec_on(tmp_path, monkeypatch, dim=4, batch=None, sid="R3V1"):
-    """Floor ledger (base-db writes into its memrack.db) + the new VecBackend
-    with the probe FORCED on and fake embeddings (the split: the vec engine
-    harvests the ledger read-only; base-db never embeds again)."""
-    led = _engine(tmp_path)
+def _fake_vec(tmp_path, monkeypatch, dim=4, batch=None, sid="R3V1"):
+    """The new VecBackend with the probe FORCED on and fake embeddings —
+    the store laws under test, never the embedder (the harvest is ENDED;
+    document ingest runs via add_source into the store's OWN corpus)."""
     vecspec = importlib.util.spec_from_file_location(
         "memrack_backends_vec", pathlib.Path(_ROOT / "backends" / "vec.py"))
     VEC = importlib.util.module_from_spec(vecspec)
@@ -70,7 +70,19 @@ def _vec_on(tmp_path, monkeypatch, dim=4, batch=None, sid="R3V1"):
     monkeypatch.setattr(vb, "_embed", _embed)
     cfg = {"vec_backfill_batch": str(batch)} if batch else {}
     vb.initialize(session_id=sid, hermes_home=str(tmp_path), provider_config=cfg)
-    return led, vb
+    return vb
+
+
+def _vstore(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "plugin-data" / "memrack" / "vec-index.db"))
+    try:
+        conn.enable_load_extension(True)
+        import sqlite_vec as _sv
+        _sv.load(conn)
+        conn.enable_load_extension(False)
+    except (ImportError, sqlite3.Error):
+        pass
+    return conn
 
 
 # ── 5) floor: base-db mounts with a SINGLE non-base entry ───────────────────
@@ -235,83 +247,91 @@ def test_remove_released_rowid_not_reused_on_fresh_store(tmp_path):
     assert r2["id"] > r1["id"], "a deleted id must not be reused on fresh stores"
 
 
-def test_remove_prunes_facts_vec(tmp_path, monkeypatch):
-    """The split: base-db deletes the ledger row; the vec backend's own
-    tombstone pass prunes the stale vector from ITS store."""
-    led, vb = _vec_on(tmp_path, monkeypatch)
-    led.write("explicit", "the prune target fact text")
-    vb.search("the prune target", "vec", 8)               # harvest pass: 1 indexed
-    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 1
-    out = led.on_memory_write("remove", "memory", "the prune target fact text")
-    assert out["removed"] == 1
-    vb._harvest()                                          # the vec backend's tombstone pass
-    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 0
+# T-047: the harvest mirror is ENDED — the vec store carries its OWN corpus;
+# there is no cross-store prune law left to pin (the old
+# test_remove_prunes_facts_vec encoded the harvested law, retired with it).
+
+# ── 3) vec hits carry the chunk id, dimension probe, embed batch ─────────────
+
+def test_vec_doc_hits_carry_chunk_id(tmp_path, monkeypatch):
+    vb = _fake_vec(tmp_path, monkeypatch)
+    out = vb.add_source("wiki:sources/hit.md", text="Semantic recall probe sentence here.")
+    hits = vb.search("Semantic recall probe sentence", "vec", 8)
+    assert hits and hits[0]["kind"] == "doc"
+    assert hits[0]["chunk_id"] >= 1 and hits[0]["source_ref"] == "wiki:sources/hit.md"
+    assert out["chunks"] >= 1
 
 
-# ── 3) vec hits carry the id, dimension probe, backfill batch ───────────────
-
-def test_vec_hits_carry_fact_id(tmp_path, monkeypatch):
-    led, vb = _vec_on(tmp_path, monkeypatch)
-    r = led.write("explicit", "semantic heat probe fact here")
-    hits = vb.search("semantic heat probe", "vec", 8)
-    assert hits and hits[0]["id"] == r["id"], "vec hits must carry the fact rowid for touch"
-
-
-def test_semantic_hits_burn_heat(tmp_path):
-    """Hits carrying the fact rowid burn LEDGER heat — through the vec backend's
-    touch (the shared heat counter is metadata, not fact content)."""
+def test_doc_hits_burn_vec_heat_not_ledger(tmp_path, monkeypatch):
+    """Doc hits bump the vec backend's OWN per-chunk counter — the ledger is
+    a base-db matter only (the T-047 heat flip)."""
+    import sqlite3
     led = _engine(tmp_path)
-    led.on_memory_write("add", "memory", "fusion heat probe entry")
-    vecspec = importlib.util.spec_from_file_location(
-        "memrack_backends_vec2", pathlib.Path(_ROOT / "backends" / "vec.py"))
-    VEC = importlib.util.module_from_spec(vecspec)
-    vecspec.loader.exec_module(VEC)
-    vb = VEC.VecBackend()
-    vb.initialize(session_id="H", hermes_home=str(tmp_path))
-    led.write("explicit", "fusion heat probe entry")      # the ledger row for the join
-    hits = [{"backend": "vec", "kind": "fact", "id": 1}, # a merged vec-ish hit carrying the id
-            ]
+    led.on_memory_write("add", "memory", "ledger heat probe entry stays untouched")
+    content = "The doc heat probe sentence lives in the doc store."
+    vb = _fake_vec(tmp_path, monkeypatch)
+    vb.add_source("wiki:sources/heat.md", text=content)
     prov = mr._MemrackBase()
     prov.initialize(session_id="H2", hermes_home=str(tmp_path))
-    prov._rack = {"vec": vb}
-    before = led._db.execute("SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
-    led._db.commit()   # a held read txn keeps the shared lock — release before the cross-connection touch
+    prov._rack["vec"] = vb           # vec rides alongside the floor (not replaced)
+    hits = vb.search("doc heat probe sentence", "vec", 8)
+    assert hits and hits[0]["kind"] == "doc"
     prov._touch_facts(hits)
-    after = led._db.execute("SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
+    st = _vstore(tmp_path)
+    try:
+        assert st.execute("SELECT heat FROM chunk_heat WHERE chunk_id = ?",
+                          (hits[0]["chunk_id"],)).fetchone()[0] == 1, \
+            "doc hits burn the OWN per-chunk counter"
+    finally:
+        st.close()
     fresh = sqlite3.connect(str(tmp_path / "plugin-data" / "memrack" / "memrack.db"))
     try:
-        after = fresh.execute(
-            "SELECT hits FROM facts WHERE content LIKE 'fusion heat%'").fetchone()[0]
+        ledger_heat = fresh.execute(
+            "SELECT hits FROM facts WHERE content LIKE 'ledger heat probe%'").fetchone()[0]
     finally:
         fresh.close()
-    assert after >= before + 1, "a hit carrying the fact rowid must bump ledger heat"
+    assert ledger_heat == 0, \
+        "doc hits must NOT burn LEDGER heat (the kind gate: fact burns ledger, doc does not)"
+    # a fact-kind hit keeps burning LEDGER heat as before (through its engine)
+    prov._touch_facts([{"backend": "base-db", "kind": "fact", "id": 1}])
+    led._db.commit()   # release the shared lock before the cross-connection read
+    fresh = sqlite3.connect(str(tmp_path / "plugin-data" / "memrack" / "memrack.db"))
+    try:
+        bumped = fresh.execute(
+            "SELECT hits FROM facts WHERE content LIKE 'ledger heat probe%'").fetchone()[0]
+    finally:
+        fresh.close()
+    assert bumped == ledger_heat + 1, (ledger_heat, bumped)
 
 
-def test_vec_backfill_batch_and_backlog_field(tmp_path, monkeypatch):
-    led, vb = _vec_on(tmp_path, monkeypatch, batch="1")
-    for text in ("first backlog fact alpha", "second backlog fact beta",
-                 "third backlog fact gamma"):
-        led.write("explicit", text)
-    hits = vb.search("first backlog fact", "vec", 8)
-    assert hits and hits[0]["_vec_backlog"] == 2, "remaining un-embedded rows must be visible"
-    assert vb._store.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0] == 1
-    hits2 = vb.search("second backlog fact", "vec", 8)
-    assert hits2[0]["_vec_backlog"] == 1
+def test_ingest_embed_batch_is_configurable(tmp_path, monkeypatch, ):
+    vb = _fake_vec(tmp_path, monkeypatch, batch="1")
+    out = vb.add_source("wiki:sources/b.md", text=_batch_doc(4, 60), chunk_chars=50)
+    assert out["chunks"] >= 3, out
+    st = _vstore(tmp_path)
+    try:
+        n = st.execute("SELECT COUNT(*) FROM facts_vec2").fetchone()[0]
+    finally:
+        st.close()
+    assert n == out["chunks"], "every chunk is embedded (batch=1, no backlog: the harvest is ended)"
 
 
-def test_vec_dimension_probe_sizes_new_table(tmp_path, monkeypatch):
-    led, vb = _vec_on(tmp_path, monkeypatch, dim=8)
-    led.write("explicit", "dimension probe fact content")
-    hits = vb.search("dimension probe", "vec", 8)        # insert must succeed at dim 8
+def _batch_doc(n, per=60):
+    return " ".join("Satz %d mit Fülltext bis zur Grenze." % i for i in range(n))
+
+
+def test_vec_dimension_probe_sizes_new_table_on_ingest(tmp_path, monkeypatch):
+    vb = _fake_vec(tmp_path, monkeypatch, dim=8)
+    vb.add_source("wiki:sources/dim.md", text="Dimension probe content in here.")
+    hits = vb.search("Dimension probe content", "vec", 8)
     assert hits
     assert vb._store.execute("SELECT vec_length(embedding) FROM facts_vec2 LIMIT 1"
                              ).fetchone()[0] == 8
 
 
 def test_vec_dimension_mismatch_degrades_honestly(tmp_path, monkeypatch):
-    led, vb = _vec_on(tmp_path, monkeypatch, dim=4)
-    led.write("explicit", "first stored fact here")
-    vb.search("first stored fact", "vec", 8)             # indexed at dim 4
+    vb = _fake_vec(tmp_path, monkeypatch, dim=4)
+    vb.add_source("wiki:sources/mm.md", text="first stored fact content here")
     vecspec = importlib.util.spec_from_file_location(
         "memrack_backends_vec3", pathlib.Path(_ROOT / "backends" / "vec.py"))
     VEC = importlib.util.module_from_spec(vecspec)

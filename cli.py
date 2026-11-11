@@ -11,6 +11,8 @@ Subcommands:
   import    — the legacy import job (builtin memory → fact rows; deterministic, idempotent)
   dock      — catalog-provider docking machine: list offers/dock cards, dock <provider>
               [--probe] (probe → draft card), --refresh (drift-recheck), show/remove
+  vec       — the vec document store: `vec add --path <file> [--ref R] [--pages N]`
+              ingests a document into the vec corpus (its OWN store, autonomous)
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ _SUBCOMMAND_HELP = (
     ("report", "heat report: hot top-10 + never-read facts + pointer counts"),
     ("export", "full JSON dump of the base-db store (facts + pointers)"),
     ("import", "legacy import job (builtin memory → fact rows, idempotent)"),
+    ("vec", "vec document store: ingest a document into the vec corpus "
+            "`vec add --path <file> [--ref <ref>] [--pages N]`"),
     ("dock", "catalog-provider docking machine: list offers/cards, "
              "dock <provider> [--probe|--refresh], show/remove"))
 
@@ -53,6 +57,19 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
         if name == "import":
             sub.add_argument("--source", choices=("memory", "user", "both"), default="both",
                              help="legacy source (default: both)")
+        if name == "vec":
+            sub.add_argument("verb", nargs="?", default="add",
+                             help="add (default: ingest a document)")
+            sub.add_argument("--path", default=None,
+                             help="document file: .md/.txt read to text, .pdf via pypdf")
+            sub.add_argument("--ref", default=None,
+                             help="stable reading reference (default: the given path)")
+            sub.add_argument("--pages", type=int, default=None,
+                             help="pdf-only: limit to the first N pages")
+            sub.add_argument("--chunk-chars", dest="chunk_chars", type=int, default=1200)
+            sub.add_argument("--chunk-overlap", dest="chunk_overlap", type=int, default=0)
+            sub.add_argument("--text", default=None,
+                             help="ingest an inline text instead of a file")
         if name == "dock":
             sub.add_argument("verb", nargs="?", default="list",
                              help="list (default) | show | remove | probe | refresh "
@@ -145,6 +162,8 @@ def _run(args) -> int:
         return 1
 
     try:
+        if args.sub == "vec":
+            return _run_vec(args, p)
         if args.sub == "status":
             _print(json.loads(p.handle_tool_call("memrack_status", {})))
         elif args.sub == "import":
@@ -176,6 +195,27 @@ def _run(args) -> int:
                                          "SELECT id, subject, location, ts FROM pointers ORDER BY id")]})
     finally:
         p.shutdown()
+    return 0
+
+
+def _run_vec(args, p) -> int:
+    """`hermes memrack vec add` — ingest into the vec store's OWN corpus."""
+    if (args.verb or "add").strip() not in ("add", ""):
+        _print({"error": "unknown vec verb %r" % args.verb,
+                "hint": "hermes memrack vec add --path <file> [--ref <ref>] [--pages N]"})
+        return 1
+    if not args.path and not args.text:
+        _print({"error": "nothing to ingest: give --path <file> (or --text)",
+                "hint": "e.g. hermes memrack vec add --path ~/wiki/notes.md"})
+        return 1
+    payload = {"source_ref": (args.ref or args.path or ""),
+               "chunk_chars": args.chunk_chars, "chunk_overlap": args.chunk_overlap,
+               "pages": args.pages}
+    payload["path" if args.path else "text"] = args.path or args.text
+    out = json.loads(p.handle_tool_call("memrack_vec_add", payload))
+    _print(out)
+    if isinstance(out, dict) and out.get("error"):
+        return 1
     return 0
 
 

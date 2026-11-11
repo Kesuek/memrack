@@ -1,7 +1,10 @@
-"""The vec backend (split): live semantic recall over the ledger — OPTIONAL.
+"""The vec backend (T-047): the AUTONOMOUS DOCUMENT STORE — OPTIONAL.
 
 Skips entirely when the environment lacks sqlite-vec or nomic via ollama
 (Basisfall must not depend on this). The floor (base-db) stays table-only.
+The vec store holds its OWN corpus: ingest via add_source, search = knn over
+ALL chunk embeddings with the content join from the OWN vecchunks table —
+the automatic ledger harvest is ENDED.
 """
 import importlib.util
 import json
@@ -69,19 +72,27 @@ def test_vec_card_reports_capability(tmp_path):
     assert "vec" in vb.card_modes() if vb._vec_ok else "vec" not in vb.card_modes()
 
 
-def test_vec_search_roundtrip(tmp_path):
+def test_vec_search_roundtrip_over_the_own_corpus(tmp_path):
+    """Ingest a document, then search it — the content join comes from the
+    vec store's OWN vecchunks table (no ledger fact needed)."""
     led, vb = _pair(tmp_path)
-    led.write("explicit", "Der IOWAP Relay Cluster laeuft auf LXC 903 im Keller")
-    led.write("explicit", "The user invests 25 Euro monthly in ETF plans")
+    out = vb.add_source("wiki:sources/roundtrip.md", text=(
+        "Der IOWAP Relay Cluster laeuft auf LXC 903 im Keller."))
+    assert out["status"] == "ingested", out
     hits = vb.search("wo laeuft der AI Relay Cluster", "vec", 8)
-    assert hits, "vec search must hit the paraphrase"
+    assert hits, "vec search must hit the ingested document"
     assert "IOWAP Relay" in hits[0]["content"]
+    assert hits[0]["kind"] == "doc" and hits[0]["source_ref"] == "wiki:sources/roundtrip.md"
+    assert hits[0]["ref"].startswith("vec:wiki:sources/roundtrip.md#c")
 
 
-def test_vec_index_is_incremental(tmp_path):
+def test_vec_corpus_is_autonomous_and_refreshable(tmp_path):
+    """Re-ingest of the same source_ref REPLACES (idempotent refresh)."""
     led, vb = _pair(tmp_path)
-    led.write("explicit", "Erster Fakt fuer Embedding")
-    vb.search("Erster Fakt", "vec", 8)                  # pass 1 embeds row 1
-    led.write("explicit", "Zweiter Fakt spaeter dazu")
-    hits = vb.search("Zweiter Fakt", "vec", 8)          # pass 2 embeds only the missing row
-    assert hits and "Zweiter Fakt" in hits[0]["content"]
+    vb.add_source("wiki:sources/refresh.md", text="Der erste Stand nennt den Hafen.")
+    out = vb.add_source("wiki:sources/refresh.md", text="Der zweite Stand nennt das Bergwerk.")
+    assert out["status"] == "ingested" and out["replaced"] >= 1, out
+    rows = vb._store.execute(
+        "SELECT content FROM vecchunks WHERE source_ref = 'wiki:sources/refresh.md'").fetchall()
+    blob = " ".join(r[0] for r in rows)
+    assert "Bergwerk" in blob and "Hafen" not in blob, blob

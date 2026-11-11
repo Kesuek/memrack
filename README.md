@@ -43,9 +43,9 @@ have.
 | base-db | fts + pointers | the tabular floor: atomic facts, hash-dedupe, FTS5 (stdlib-only, zero network) |
 | wiki | fts | whole-page knowledge (opt-in park/unpark) |
 | state-episodic | episodic | read-only search over the host session history |
-| **vec** (opt-in) | vec | semantic recall over the fact ledger — sqlite-vec + a local OpenAI-compatible embedder; own store (`plugin-data/memrack/vec-index.db`), ledger attached read-only; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off; one-time legacy-embedding import on first enable |
+| **vec** (opt-in) | vec (+ `memrack_vec_add` ingest) | AUTONOMOUS DOCUMENT STORE — ingest .md/.txt/pdf into chunks (mechanical, batched embedded) and recall them semantically; own store (`plugin-data/memrack/vec-index.db`: vecchunks + chunk_heat); the corpus holds ONLY what was ingested (the ledger harvest is ended); pdf needs the optional pypdf dep; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off |
 
-## Status — v0.10.0 (327 tests green)
+## Status — v0.11.0 (344 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
@@ -70,8 +70,10 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 - [x] Built-in `wiki` backend wrapping wiki-memory (opt-in migration bridge, default parked) —
       now with a page search engine (`WikiIndex`, stdlib-only: stat-first
       mtime/size pass — unchanged pages are never read —, L<n>-targets, snippets)
-- [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, incremental embed pass,
-      honest degrade (fts-only + gap note) when the env lacks it
+- [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, since v0.11.0 an
+      AUTONOMOUS document store: ingest via `memrack_vec_add` / `hermes memrack vec add`
+      (pypdf optional dep, fail loud), mechanical chunking, re-ingest = replace, own
+      per-chunk heat; search = knn over the OWN chunk embeddings (ledger harvest ended)
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
       ("registered (next session)" in `memrack_status`; broken manifests
