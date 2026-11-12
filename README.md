@@ -80,7 +80,10 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
       (pypdf optional dep, fail loud), mechanical chunking, re-ingest = replace, own
       per-chunk heat; search = knn over the OWN chunk embeddings (ledger harvest ended);
       ingest paths are CONTAINED — file paths must sit under `vec_ingest_roots`
-      (fallback: home dir + wiki_root), HERMES_HOME / ~/.ssh / `.env*` refuse first
+      (fallback: home dir + wiki_root), HERMES_HOME / ~/.ssh / `.env*` refuse first;
+      embedder is NOT hardwired — local Ollama by default (`embedding_endpoint: ollama`)
+      or any OpenAI-compatible endpoint (Nous Portal inference API, llama.cpp /v1) via
+      `embedding_endpoint: openai` + `embedding_base_url` + `embedding_api_key_env`
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
       ("registered (next session)" in `memrack_status`; broken manifests

@@ -119,8 +119,9 @@ class VecBackend:
                 "opt-in — the floor stays table-only for ms-fast fts")
     limits = ("an INDEPENDENT corpus — ONLY what was ingested here is in (no automatic "
               "ledger harvest); pdf ingest needs the optional pypdf dep; requires a "
-              "reachable local embedder AND its membership toggle; cold start on the "
-              "first query after a restart lives here")
+              "reachable embedder (local Ollama by default, or any OpenAI-compatible "
+              "endpoint via embedding_endpoint/embedding_base_url) AND its membership "
+              "toggle; cold start on the first query after a restart lives here")
     search_modes = ("vec",)
     writeable = False   # no atomic facts: ingest goes through add_source/vec add
 
@@ -211,12 +212,46 @@ class VecBackend:
             self._store.commit()
 
     # ── embedder probe / embedding ──
+    # NO hard wiring: the embedder resolves from the memrack provider config
+    # (vec group). Default = local Ollama exactly as before. `openai` style
+    # points at ANY OpenAI-compatible embeddings endpoint — paste the base_url
+    # of a provider already configured in Hermes (Nous Portal inference API,
+    # ollama-cloud via a custom provider, a self-hosted llama.cpp /v1) and set
+    # `embedding_api_key_env` to the SAME env var the provider profile expects.
+    # Keys resolve through the secret scope first (multiplex law), env fallback
+    # for single-home sessions. Dimension changes = empty the vec store (
+    # idx_meta carries model + dim, no live re-index).
+    def _resolve_embedder(self):
+        style = (self._provider_config.get("embedding_endpoint") or "ollama")
+        style = str(style).strip().lower()
+        if style not in ("ollama", "openai"):
+            style = "ollama"
+        base = str(self._provider_config.get("embedding_base_url") or "").strip().rstrip("/")
+        key_env = str(self._provider_config.get("embedding_api_key_env") or "").strip()
+        return style, base, key_env
+
+    def _api_key(self, key_env):
+        if not key_env:
+            return ""
+        try:
+            from agent.secret_scope import get_secret
+            try:
+                return str(get_secret(key_env) or "")
+            except Exception:
+                pass   # unbound scope / missing registration: single-home env read below
+        except ImportError:
+            pass       # no Hermes tree alongside the plugin (third-party reviewer runs)
+        return os.environ.get(key_env, "")
+
     def _probe(self):
         try:
             import sqlite_vec  # noqa: F401
         except ImportError:
             self._vec_gap = "sqlite-vec package not installed (optional dep)"
             return False
+        style, base, key_env = self._resolve_embedder()
+        if style == "openai":
+            return self._probe_openai(base, key_env)
         try:
             import urllib.request
             with urllib.request.urlopen(self._host.rstrip("/") + "/api/tags", timeout=1) as resp:
@@ -231,9 +266,53 @@ class VecBackend:
         self._vec_gap = ""
         return True
 
+    def _probe_openai(self, base, key_env):
+        """Ready = the endpoint answers /models (the model itself is NOT gated:
+        provider model lists paginate/vary, the first embed call fails loud
+        with the honest error if the id is wrong)."""
+        if not base:
+            self._vec_gap = ("openai embedder selected but embedding_base_url "
+                             "not set (e.g. the provider profile's inference url)")
+            return False
+        import urllib.error
+        import urllib.request
+        headers = {"Content-Type": "application/json"}
+        key = self._api_key(key_env)
+        if key:
+            headers["Authorization"] = "Bearer " + key
+        try:
+            req = urllib.request.Request(base + "/models", headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            self._vec_gap = "%s/models answered HTTP %s (check embedding_api_key_env " \
+                            "%r / the provider token)" % (base, exc.code, key_env)
+            return False
+        except Exception as exc:
+            self._vec_gap = "%s not reachable: %s" % (base, exc)
+            return False
+        self._vec_gap = ""
+        return True
+
     def _embed(self, texts, timeout=300):
         import urllib.request
+        style, base, key_env = self._resolve_embedder()
         body = json.dumps({"model": self._model, "input": list(texts)}).encode("utf-8")
+        if style == "openai":
+            headers = {"Content-Type": "application/json"}
+            key = self._api_key(key_env)
+            if key:
+                headers["Authorization"] = "Bearer " + key
+            req = urllib.request.Request(base + "/embeddings", data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.load(resp)
+            out = []
+            for item in (data.get("data") or []):
+                emb = item.get("embedding")
+                if emb is None:
+                    raise RuntimeError("embedding endpoint returned no embedding vector")
+                out.append([float(x) for x in emb])
+            return out
         req = urllib.request.Request(self._host.rstrip("/") + "/api/embed", data=body,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:

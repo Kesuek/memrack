@@ -233,6 +233,26 @@ _STATIC_FIELDS = (
                     "HERMES_HOME, ~/.ssh and .env files always refuse",
     ),
     ProviderField(
+        key="embedding_endpoint", label="Embedding endpoint style", kind=KIND_TEXT,
+        default="ollama", group="vec",
+        description="ollama (default, local /api/embed) or openai — any "
+                    "OpenAI-compatible embeddings endpoint (Nous Portal "
+                    "inference API, ollama-cloud, llama.cpp /v1)",
+    ),
+    ProviderField(
+        key="embedding_base_url", label="Embedding base URL", kind=KIND_TEXT,
+        default="", group="vec",
+        description="openai style only: the endpoint base, e.g. the base_url "
+                    "of a provider configured in Hermes "
+                    "(https://inference-api.nousresearch.com/v1)",
+    ),
+    ProviderField(
+        key="embedding_api_key_env", label="Embedding API key env var",
+        kind=KIND_TEXT, default="", group="vec",
+        description="NAME of the env var holding the endpoint key (same var the "
+                    "provider profile expects) — not the key itself",
+    ),
+    ProviderField(
         key="dock_retention_days", label="Uninstall retention days",
         kind=KIND_NUMBER, default="14",
         description="Days an uninstalled dock card stays parked before card + "

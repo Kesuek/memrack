@@ -406,10 +406,20 @@ no embedding calls, no cold start. The built-in `vec` backend (opt-in over the
   `source_ref`, a reading reference `ref = vec:<source_ref>#c<chunk_idx>`,
   ts, distance, and the per-chunk heat counter. Doc hits burn the OWN
   counter — the ledger heat is a base-db matter only.
-- availability: embedder probe at init (ollama tags + model presence); without
-  a live embedder the card degrades honestly (no vec promise) and the rack
+- availability: embedder probe at init (ollama: tags + model presence; openai
+  style: `/models` with the configured key — the model ID itself is not gated,
+  the first embed call fails loud instead); without a live embedder the card
+  degrades honestly (no vec promise) and the rack
   keeps answering fts/pointers/episodic — the probe's reason rides the card
   additively as `env_gap` (fresh-init cards AND the served status, one copy).
+- embedder routing (NO hard wiring): `embedding_endpoint` `ollama` (default,
+  unchanged local behavior) or `openai` — any OpenAI-compatible embeddings
+  endpoint (`embedding_base_url` = the base_url of a provider already
+  configured in Hermes, e.g. the Nous Portal inference API, a self-hosted
+  llama.cpp `/v1`; `embedding_api_key_env` = the NAME of the env var holding
+  the key, resolved through the Hermes secret scope first). Keys never live in
+  config.yaml. A different embedding model/dimension needs the vec store
+  re-ingested (`idx_meta` carries model + dimension — no live re-index).
 - limits: an INDEPENDENT corpus — only what was ingested is in; pdf needs
   pypdf; the cold start after a restart lives here (the model load), warm
   queries measure in the hundreds of ms.
