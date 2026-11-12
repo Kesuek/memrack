@@ -226,6 +226,13 @@ _STATIC_FIELDS = (
         description="Ollama endpoint for vec embeddings",
     ),
     ProviderField(
+        key="vec_ingest_roots", label="Vec ingest roots", kind=KIND_TEXT,
+        default="", group="vec",
+        description="Comma-separated path roots the vec engine may ingest "
+                    "files from (fallback: the home dir + wiki_root); "
+                    "HERMES_HOME, ~/.ssh and .env files always refuse",
+    ),
+    ProviderField(
         key="dock_retention_days", label="Uninstall retention days",
         kind=KIND_NUMBER, default="14",
         description="Days an uninstalled dock card stays parked before card + "

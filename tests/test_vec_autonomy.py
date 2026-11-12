@@ -51,6 +51,8 @@ def _fake_vec(tmp_path, monkeypatch, dim=4, batch=None, sid="T47"):
 
     monkeypatch.setattr(vb, "_embed", _embed)
     cfg = {"vec_backfill_batch": str(batch)} if batch else {}
+    cfg.setdefault("vec_ingest_roots", str(tmp_path))   # containment: tests ingest their tmp files
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))   # the secret wall must not eat the pytest tmpdir (lives under the real home's .hermes/cache)
     vb.initialize(session_id=sid, hermes_home=str(tmp_path), provider_config=cfg)
     return vb
 

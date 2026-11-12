@@ -78,7 +78,9 @@ Docs: [`docs/concept.md`](docs/concept.md) (why memrack), [`docs/backend-guide.m
 - [x] vec engine (sqlite-vec + nomic-embed-text) — OPTIONAL upgrade, since v0.11.0 an
       AUTONOMOUS document store: ingest via `memrack_vec_add` / `hermes memrack vec add`
       (pypdf optional dep, fail loud), mechanical chunking, re-ingest = replace, own
-      per-chunk heat; search = knn over the OWN chunk embeddings (ledger harvest ended)
+      per-chunk heat; search = knn over the OWN chunk embeddings (ledger harvest ended);
+      ingest paths are CONTAINED — file paths must sit under `vec_ingest_roots`
+      (fallback: home dir + wiki_root), HERMES_HOME / ~/.ssh / `.env*` refuse first
 - [x] bridge-adapter-style manifest registry: card-as-data, structural card-vs-code checks,
       2-pass discovery (manifest-referenced modules never double-load), pending-dock rescan
       ("registered (next session)" in `memrack_status`; broken manifests

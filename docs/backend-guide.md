@@ -394,6 +394,13 @@ no embedding calls, no cold start. The built-in `vec` backend (opt-in over the
   the embed batch); re-ingest of a source_ref REPLACES (idempotent refresh);
   content-hash dedupe skips an unchanged source. No LLM calls — the
   embeddings are the only model contact.
+- ingest path CONTAINMENT: file paths resolve (symlinks included) and must sit
+  under a configured ingest root — `vec_ingest_roots` (comma-separated; the
+  fallback is the home dir plus wiki_root when configured). The SECRET WALLS
+  refuse FIRST and win over any root: everything inside HERMES_HOME or
+  ~/.ssh, and every `.env*` path, is a PermissionError before the file is
+  touched — a prompt-injected path cannot ship secrets to the embedding host.
+  Widen the roots in the memrack config (provider surface field, vec group).
 - search: knn over ALL chunk embeddings, the content join comes from the OWN
   vecchunks table (no ledger dependency); hits carry `kind=doc`, `chunk_id`,
   `source_ref`, a reading reference `ref = vec:<source_ref>#c<chunk_idx>`,

@@ -30,6 +30,7 @@ has zero Ollama contact and zero cold start.
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -416,9 +417,54 @@ class VecBackend:
         return {"status": "ingested", "source_ref": source_ref,
                 "chunks": len(chunks), "replaced": len(old_ids)}
 
+    # ── ingest path containment (Security-Review #154152) ──
+    # A prompt-injected tool call must not ingest secrets ($HERMES_HOME/.env,
+    # auth.json, ~/.ssh) into the corpus and ship them to the embedding host.
+    # Rules: the path must resolve (symlinks resolved) under a CONFIGURED root
+    # (vec_ingest_roots, fallback: the home dir; wiki_root rides along when
+    # configured) — and the SECRET WALLS (HERMES_HOME, ~/.ssh, .env* names)
+    # refuse even when a configured root happens to cover them. Walls win.
+    def _ingest_roots(self):
+        roots: "list[Path]" = []
+        raw_conf = self._provider_config.get("vec_ingest_roots")
+        if raw_conf:
+            if isinstance(raw_conf, str):
+                raw_conf = [x for x in raw_conf.split(",") if x.strip()]
+            for raw in raw_conf:
+                roots.append(Path(str(raw)).expanduser().resolve())
+        wiki_root = self._provider_config.get("wiki_root")
+        if wiki_root:
+            roots.append(Path(str(wiki_root)).expanduser().resolve())
+        return roots or [Path.home().resolve()]
+
+    def _check_ingest_path(self, path):
+        p = Path(str(path)).expanduser().resolve()
+        hermes_home = Path(
+            os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).resolve()
+        ssh_dir = (Path.home() / ".ssh").resolve()
+        if p == hermes_home or hermes_home in p.parents:
+            raise PermissionError(
+                "vec ingest path refused: inside HERMES_HOME — %s" % p)
+        if p == ssh_dir or ssh_dir in p.parents:
+            raise PermissionError(
+                "vec ingest path refused: inside ~/.ssh — %s" % p)
+        if any(str(part).startswith(".env") for part in [p.name, *p.parents]):
+            raise PermissionError(
+                "vec ingest path refused: .env file — %s" % p)
+        roots = self._ingest_roots()
+        if not any(p == r or r in p.parents for r in roots):
+            raise PermissionError(
+                "vec ingest path refused: outside the configured ingest roots "
+                "(set vec_ingest_roots in the memrack config to widen) — %s "
+                "(allowed roots: %s)" % (p, ", ".join(str(r) for r in roots)))
+        return p
+
     def _read_source(self, path, pages=None):
-        """.md/.txt straight to text; .pdf via pypdf extraction (OPTIONAL dep,
-        fail loud with an install hint; fail loud on empty extraction)."""
+        """Containment check → .md/.txt straight to text; .pdf via pypdf
+        extraction (OPTIONAL dep, fail loud with an install hint; fail loud on
+        empty extraction). The containment check runs FIRST — a prompt-injected
+        path never reaches the reader, no matter how valid the file looks."""
+        self._check_ingest_path(path)
         p = Path(str(path))
         if not p.exists():
             raise FileNotFoundError("source path not found: %s" % p)
