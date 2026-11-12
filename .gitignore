@@ -4,3 +4,4 @@ __pycache__/
 .hermes/
 /dist/
 *.egg-info/
+BACKEND_GUIDE.md

@@ -45,7 +45,7 @@ have.
 | state-episodic | episodic | read-only search over the host session history |
 | **vec** (opt-in) | vec (+ `memrack_vec_add` ingest) | AUTONOMOUS DOCUMENT STORE — ingest .md/.txt/pdf into chunks (mechanical, batched embedded) and recall them semantically; own store (`plugin-data/memrack/vec-index.db`: vecchunks + chunk_heat); the corpus holds ONLY what was ingested (the ledger harvest is ended); pdf needs the optional pypdf dep; OFF by default (`vec_in_rack` toggle) — no ollama contact, no cold start while off |
 
-## Status — v0.11.1 (362 tests green)
+## Status — v0.11.1 (385 tests green)
 
 **Ships with three backends:** `base-db` (the stdlib floor, always on, storage created
 at activation), `wiki` (markdown bridge, opt-in), `state-episodic` (READ-ONLY search
