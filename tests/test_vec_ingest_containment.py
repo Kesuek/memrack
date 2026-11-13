@@ -50,6 +50,35 @@ def test_hermes_home_nested_refused(vb, tmp_path):
         vb._check_ingest_path(tmp_path / "hermes-home" / "auth.json")
 
 
+def test_global_root_auth_json_refused_under_profile(
+        vb, tmp_path, monkeypatch):
+    """Round-2 review: HERMES_HOME=<root>/profiles/<name> misses the GLOBAL
+    root's credential stores (auth.json, mcp-tokens/, vault/) via the own
+    HERMES_HOME wall — the host read-denylist must refuse them. Gated on the
+    Hermes runtime tree (third-party runs without the platform skip)."""
+    _hermes = pathlib.Path.home() / ".hermes" / "hermes-agent"
+    if _hermes.is_dir() and str(_hermes) not in sys.path:
+        sys.path.insert(0, str(_hermes))
+    pytest.importorskip(
+        "agent.file_safety", reason="host read-denylist needs the Hermes tree")
+    # The root must sit OUTSIDE the real ~/.hermes: get_default_hermes_root
+    # treats any HERMES_HOME under it as native-home-relative (root stays
+    # ~/.hermes), so the profile-vs-global-root scenario would never shape up
+    # in a tmp under ~/.hermes.
+    import shutil as _shutil
+    import tempfile as _tempfile
+    root = pathlib.Path(_tempfile.mkdtemp(prefix="vecwall-", dir="/tmp"))
+    try:
+        monkeypatch.setenv("HERMES_HOME", str(root / "profiles" / "x"))
+        auth_json = root / "auth.json"          # global root credential store
+        auth_json.write_text("{}")
+        _roots(vb, root)                        # root COVERS it — wall wins
+        with pytest.raises(PermissionError):
+            vb._check_ingest_path(auth_json)
+    finally:
+        _shutil.rmtree(root, ignore_errors=True)
+
+
 def test_ssh_dir_refused(vb, tmp_path, monkeypatch):
     home = tmp_path / "fake-home"
     home.mkdir(parents=True)

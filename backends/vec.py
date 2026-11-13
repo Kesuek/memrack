@@ -530,6 +530,23 @@ class VecBackend:
         if any(str(part).startswith(".env") for part in [p.name, *p.parents]):
             raise PermissionError(
                 "vec ingest path refused: .env file — %s" % p)
+        # Host read-denylist as a PRIMARY wall (Security-Review #154152 round 2):
+        # covers the global root's auth.json / mcp-tokens/ / vault/ /
+        # browser-profile/ under profiles — paths the HERMES_HOME wall above
+        # misses when HERMES_HOME points at <root>/profiles/<name>. Also
+        # covers /proc and /dev. Own walls stay as the fallback for
+        # memrack-specific rules (roots enforcement below), but the host
+        # verdict wins first.
+        try:
+            from agent.file_safety import (
+                get_read_block_error as _read_block_error)
+        except ImportError:
+            _read_block_error = None  # no Hermes tree: own walls only
+        if _read_block_error is not None:
+            block_msg = _read_block_error(str(p))
+            if block_msg:
+                raise PermissionError(
+                    "vec ingest path refused: %s — %s" % (block_msg, p))
         roots = self._ingest_roots()
         if not any(p == r or r in p.parents for r in roots):
             raise PermissionError(
